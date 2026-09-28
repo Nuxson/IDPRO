@@ -1,6 +1,6 @@
-# Compiled and build artifacts
+# Compiled files
 __pycache__/
 *.pyc
 
-# Logs and temp files
-*.log
+# Database files
+ids.db
