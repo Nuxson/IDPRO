@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db
@@ -15,6 +16,7 @@ from .idgen import extract_parts, make_id, verify_checksum
 app = FastAPI(title="Unique ID Generator", version="1.0")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")  # js/idgen.js, js/app.js
 SECRET = os.environ.get("IDGEN_SECRET") or None  # необязательный секрет для контрольного кода
 
 
