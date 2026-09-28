@@ -54,7 +54,7 @@ def test_date_is_automatic():
 def test_deterministic_and_normalized():
     a = make_id(**BASE, dt="15.03.2026")["id"]
     b = make_id(producer="  ромашка ", dt="2026-03-15", location="москва",
-                company="ВЕКТОР", serial=" sn-00123 ", port="tn_a", site="6")["id"]
+                company="ВЕКТОР", serial=" sn-00123 ", port="tn_a", site="5")["id"]
     assert a == b
 
 
