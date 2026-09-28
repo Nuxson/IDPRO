@@ -1,23 +1,33 @@
 """
-Формат ID v2 — читаемый код вида «PPPDWC + хеш + CRC».
+Формат ID v3 — читаемый код вида «PP + DWC + CC + порт + площадка + хеш + CRC».
 
-Пример: ER1AF-3V9K-QPZT-HD  для Ericsson, 1-я неделя августа, пятница.
+Пример короткого кода: ER2HF-MS-A-6
+  Ericsson, 2-я неделя августа, пятница (07.08.2026), компания Масштаб-Связь (MS),
+  порт TN_A (A), номер площадки 6 (код '7').
 
-Разбор первых 5 символов (сегмент производителя и даты):
-  [0:2]  PP   — код производителя (первые 2 буквы транслита; при коллизии — 3-я буква)
-  [2]    D    — номер недели (1..9, затем A,B,C,D,E; всего 53 значения)
-  [3]    W    — месяц: A=Январь ... L=Декабрь
-  [4]    C    — день недели: A=Понедельник ... G=Воскресенье
+Разбор компактного кода (до контрольного кода):
+  [0:2]  PP   — код производителя (транслит; Ericsson -> ER)
+  [2:5]  DWC  — дата: D = номер недели в месяце (дни 1–7 = 1, 8–14 = 2 ...),
+               W = месяц (B=Январь ... Q=Декабрь),
+               C = день недели (A=Понедельник ... F=Пятница, G=Воскресенье).
+               Ввод даты — ДД.ММ.ГГГГ (DD.MM.YYYY / DD:MM:YYYY)
+  [5:7]  CC   — читаемое сокращение компании по инициалам слов
+               (Масштаб-Связь -> MS; нечитаемые символы заменяются на Q)
+  [7]    S    — порт: TN_A -> A, TN_B -> B, TN_C -> C
+  [8]    S    — номер площадки из алфавита base31: 1->'2', ..., 9->'A', 14->'J'
+
+Все символы ID принадлежат алфавиту base31 (без неоднозначных 0/O, 1/I/L, U, Y),
+поэтому офлайн-проверка отлавливает любую опечатку. Символы недель/месяцев/дней/
+площадок читаются по справочникам выше; точная дата и все поля восстанавливаются
+по внутренней базе (lookup по коду).
 
 Далее:
-  [5:11]       — хеш-часть SHA-256 от канонической строки полей v2 (base31, 6 симв.)
-  [11:13]      — контрольный код HMAC-SHA256 от тела ID (аналог CRC/IMEI)
+  хеш-часть   — SHA-256 от канонической строки полей v3 (base31, 6 симв.) —
+                кодирует место положения и серийный номер (уникальность);
+  контрольный — HMAC-SHA256 от тела ID (аналог CRC/IMEI), офлайн-проверка.
 
-Компания и место положения кодируются внутри хеш-части: они влияют на код
-(изменение любого поля меняет ID), но не читаются глазами. Расшифровка всех
-полей — по внутренней базе (lookup по коду).
-
-Алфавит base31 без неоднозначных символов (нет 0/O, 1/I/L).
+Полный вид с группировкой по 4 символа: ER2H-FMSA-6XXX-XXXX-YY
+(где XXXX... — хеш, YY — контрольный код).
 """
 
 from __future__ import annotations
@@ -25,22 +35,24 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from datetime import date, timedelta
+from datetime import date
 
 # ---------- Справочники ----------
-WEEK_CODES = "123456789ABCDEFGHJKLMNPQRSTUVWXYZ"          # 34 символа (без I,O,U,Y)
-MONTH_CODES = "ABCDEFGHIJKL"                              # A=Январь ... L=Декабрь
-WEEKDAY_CODES = "GABCDEF"                                 # A=Понедельник ... G=Воскресенье
+MONTH_CODES = "BCDEFGHJKLMNPQ"        # месяц: B=Январь ... Q=Декабрь (алфавит без 0/O,1/I,L,U,Y)
+WEEKDAY_CODES = "ABCDEFG"             # день недели: A=Понедельник ... F=Пятница, G=Воскресенье
+SITE_CODES = "23456789ABCDEFGHJ"      # номер площадки: 1->'2', ..., 9->'A', 10->'B' ... 14->'J'
+PORT_CODES = {"TN_A": "A", "TN_B": "B", "TN_C": "C"}   # порт -> буква
 
-ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"              # base31 для хеша/CRC
+ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"           # base31 (нет 0/O, 1/I/L, U, Y)
 BASE = len(ALPHABET)
 
 SEP = "-"
 BLOCK = 4
 HASH_LEN = 6
 CHECK_LEN = 2
-BODY_LEN = 5 + HASH_LEN                                   # 11
-TOTAL_LEN = BODY_LEN + CHECK_LEN                          # 13
+PREFIX_LEN = 9                                            # PP + DWC + CC + порт + площадка
+BODY_LEN = PREFIX_LEN + HASH_LEN                          # 15
+TOTAL_LEN = BODY_LEN + CHECK_LEN                          # 17
 
 _NON_ALNUM = re.compile(r"[^A-Z0-9]")
 
@@ -86,14 +98,15 @@ def producer_code(name: str) -> str:
     letters = _NON_ALNUM.sub("", _translit(n))
     if len(letters) >= 2 and all(ch in ALPHABET for ch in letters[:2]):
         return letters[:2]
-    digest = hashlib.sha256(("v2p:" + n).encode()).digest()
+    digest = hashlib.sha256(("v3p:" + n).encode()).digest()
     return to_base31(int.from_bytes(digest[:4], "big"), 2)
 
 
 def company_abbr(name: str) -> str:
-    """Читаемое сокращение компании по инициалам слов (Масштаб-Связь -> МС, MASHTAB-SVYAZ -> MS).
+    """Читаемое сокращение компании по инициалам слов (Масштаб-Связь -> MS).
 
-    Используется в подсказках UI; в самом ID компания участвует через хеш-часть.
+    Используется в сегменте CC внутри ID; нечитаемые в алфавите буквы
+    (I, O, U, Y) заменяются на Q, одиночное слово дополняется до 2 символов.
     """
     n = _norm(name)
     if n in COMPANY_ALIASES:
@@ -104,22 +117,63 @@ def company_abbr(name: str) -> str:
     return cleaned.ljust(2, "Q")
 
 
+def port_code(port: str) -> str:
+    """Код порта: TN_A -> A, TN_B -> B, TN_C -> C (регистр/разделители не важны)."""
+    key = re.sub(r"[^A-Z0-9]", "_", _norm(port))
+    if key in PORT_CODES:
+        return PORT_CODES[key]
+    compact = key.replace("_", "")
+    if compact in PORT_CODES:
+        return PORT_CODES[compact]
+    raise ValueError(f"Неизвестный порт: {port!r} (допустимо: TN_A, TN_B, TN_C)")
+
+
+def site_code(site: str) -> str:
+    """Код номера площадки из алфавита base31: 1->'2', 9->'A', 14->'J'; диапазон 1..14."""
+    s = _norm(site).replace(" ", "")
+    s = re.sub(r"^(НОМЕР|NOMER|NO|#)", "", s) or s
+    try:
+        num = int(s)
+    except ValueError:
+        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается число 1..{len(SITE_CODES)})")
+    if not 1 <= num <= len(SITE_CODES):
+        raise ValueError(f"Номер площадки вне диапазона 1..{len(SITE_CODES)}: {site!r}")
+    return SITE_CODES[num - 1]
+
+
+def decode_site(code: str) -> int:
+    """Обратный разбор кода площадки ('B' -> 10)."""
+    return SITE_CODES.index(code.upper()) + 1
+
+
+def week_symbol(week_in_month: int) -> str:
+    """Символ номера недели в месяце из алфавита base31: 1->'2', 5->'6'."""
+    if not 1 <= week_in_month <= 5:
+        raise ValueError(f"Недель в месяце не бывает {week_in_month}")
+    return ALPHABET[week_in_month - 1]
+
+
+def week_from_symbol(sym: str) -> int:
+    return ALPHABET.index(sym.upper()) + 1
+
+
 def _week_of_month(d: date) -> int:
     """Номер недели внутри месяца (1..5): неделя 1 = дни 1–7, неделя 2 = 8–14 и т.д."""
     return (d.day - 1) // 7 + 1
 
 
 def date_segment(iso_date: str) -> str:
-    """Сегмент даты DWC: номер недели в месяце + месяц + день недели (напр. 1AF).
+    """Сегмент даты DWC: номер недели в месяце + месяц + день недели (напр. 2HF).
 
-    Пример: 2026-08-07 (пятница) -> '1' (1-я неделя августа, дни 1–7) + 'H' (Август)
-    + 'F' (Пятница) = 1HF. Диапазон кодировки — 2020–2073 годы.
+    Все символы — из алфавита base31 (без 0/O, 1/I/L): неделя 1->'2', ... 5->'6';
+    месяц B=Январь ... Q=Декабрь; день недели A=Пн ... F=Пт, G=Вс.
+    Пример: 07.08.2026 (пятница) -> '2' (2-я неделя августа, дни 8–14) + 'H' (Август)
+    + 'F' (Пятница) = 2HF. Диапазон кодировки — 2020–2073 годы.
     """
     d = date.fromisoformat(iso_date)
     if not date(2020, 1, 1) <= d <= date(2073, 12, 31):
-        raise ValueError(f"Дата вне диапазона кодировки v2 (2020–2073): {iso_date}")
-    wcode = WEEK_CODES[_week_of_month(d) - 1]
-    return f"{wcode}{MONTH_CODES[d.month - 1]}{WEEKDAY_CODES[d.isoweekday() - 1]}"
+        raise ValueError(f"Дата вне диапазона кодировки (2020–2073): {iso_date}")
+    return f"{week_symbol(_week_of_month(d))}{MONTH_CODES[d.month - 1]}{WEEKDAY_CODES[d.isoweekday() - 1]}"
 
 
 def decode_date_segment(seg: str, ref_iso: str | None = None) -> dict:
@@ -129,11 +183,11 @@ def decode_date_segment(seg: str, ref_iso: str | None = None) -> dict:
     год подбирается как ближайший прошедший, для которого сегмент непротиворечив.
     """
     wcode, mcode, ccode = seg.upper()
-    if wcode not in WEEK_CODES[:5] or mcode not in MONTH_CODES or ccode not in WEEKDAY_CODES:
+    if wcode not in ALPHABET[:5] or mcode not in MONTH_CODES or ccode not in WEEKDAY_CODES:
         raise ValueError(f"Некорректный сегмент даты: {seg!r}")
     month = MONTH_CODES.index(mcode) + 1
     weekday = WEEKDAY_CODES.index(ccode) + 1
-    week_in_month = WEEK_CODES.index(wcode) + 1
+    week_in_month = week_from_symbol(wcode)
     info: dict = {
         "week_symbol": wcode,
         "week_in_month": week_in_month,
@@ -144,7 +198,7 @@ def decode_date_segment(seg: str, ref_iso: str | None = None) -> dict:
         "weekday_name": ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница",
                          "Суббота", "Воскресенье"][weekday - 1],
     }
-    # подбор дня: d такой, что _week_of_month(d)==week_in_month и d.isoweekday()==weekday
+
     def day_for(year: int) -> str | None:
         for day in range(1, 32):
             try:
@@ -161,7 +215,7 @@ def decode_date_segment(seg: str, ref_iso: str | None = None) -> dict:
         try:
             d = date.fromisoformat(ref_iso)
             year = d.year
-            if date_segment(ref_iso)[2:5] == seg.upper():
+            if date_segment(ref_iso) == seg.upper():
                 date_approx = ref_iso
         except ValueError:
             pass
@@ -178,11 +232,14 @@ def decode_date_segment(seg: str, ref_iso: str | None = None) -> dict:
 
 
 def norm_date(value: str) -> str:
-    """Приведение даты к ISO (YYYY-MM-DD). Принимает ГГГГ-ММ-ДД, ДД.ММ.ГГГГ, ДД-ММ-ГГГГ, ГГГГ/ММ/ДД."""
-    v = _norm(value).replace("/", "-").replace(".", "-")
+    """Приведение даты к ISO (YYYY-MM-DD). Основной формат ввода — ДД.ММ.ГГГГ (DD:MM:YYYY).
+
+    Дополнительно принимаются ГГГГ-ММ-ДД, ДД-ММ-ГГГГ, ГГГГ:ММ:ДД, ДД/ММ/ГГГГ.
+    """
+    v = _norm(value).replace("/", "-").replace(".", "-").replace(":", "-")
     m = re.fullmatch(r"(\d{1,4})-(\d{1,2})-(\d{1,4})", v)
     if not m:
-        raise ValueError(f"Некорректный формат даты: {value!r} (ожидается ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)")
+        raise ValueError(f"Некорректный формат даты: {value!r} (ожидается ДД.ММ.ГГГГ или DD:MM:YYYY)")
     a, b, c = m.group(1), int(m.group(2)), int(m.group(3))
     if len(a) == 4:
         y, mo, d = int(a), b, c
@@ -211,36 +268,53 @@ def checksum(body: str, secret: str | None = None) -> str:
     return to_base31(int.from_bytes(digest[:4], "big"), CHECK_LEN)
 
 
-def canonical_string(producer: str, iso_date: str, location: str, company: str, serial: str) -> str:
-    """Каноническая строка формата v2 (версия зафиксирована в префиксе 'v2')."""
-    return "|".join(["v2", producer, iso_date, location, company, serial])
+def canonical_string(producer: str, iso_date: str, location: str, company: str,
+                     serial: str, port: str, site: str) -> str:
+    """Каноническая строка формата v3 (версия зафиксирована в префиксе 'v3')."""
+    return "|".join(["v3", producer, iso_date, location, company, serial, port, site])
+
+
+def short_code(producer: str, iso_date: str, company: str, port: str, site: str) -> str:
+    """Короткий читаемый код вида ER1AF-MS-A-N (без хеша и CRC) — для площадок/журналов."""
+    return SEP.join([
+        producer_code(producer) + date_segment(iso_date),
+        company_abbr(company),
+        port_code(port),
+        site_code(site),
+    ])
 
 
 def make_id(producer: str, dt: str, location: str, company: str, serial: str,
-            secret: str | None = None) -> dict:
-    """Генерирует читаемый ID формата v2. Детерминирован: те же данные → тот же ID."""
-    producer, location, company, serial = (_norm(x) for x in (producer, location, company, serial))
-    missing = [name for name, val in (("производитель", producer), ("место", location),
-                                      ("компания", company), ("серийный номер", serial)) if not val]
+            port: str, site: str, secret: str | None = None) -> dict:
+    """Генерирует читаемый ID формата v3. Детерминирован: те же данные → тот же ID."""
+    producer, iso_location, company, serial, site = (
+        _norm(x) for x in (producer, location, company, serial, site))
+    port_n = _norm(port)
+    missing = [name for name, val in (("производитель", producer), ("место", iso_location),
+                                      ("компания", company), ("серийный номер", serial),
+                                      ("порт", port_n), ("номер площадки", site)) if not val]
     if missing:
         raise ValueError("Заполните поля: " + ", ".join(missing))
     iso_date = norm_date(dt)
 
-    canon = canonical_string(producer, iso_date, location, company, serial)
+    canon = canonical_string(producer, iso_date, iso_location, company, serial, port_n, site)
     hash_part = to_base31(int(hashlib.sha256(canon.encode()).hexdigest()[:16], 16), HASH_LEN)
 
-    body = producer_code(producer) + date_segment(iso_date) + hash_part
+    prefix = (producer_code(producer) + date_segment(iso_date) + company_abbr(company)
+              + port_code(port_n) + site_code(site))
+    body = prefix + hash_part
     full = body + checksum(body, secret)
     blocks = [full[i:i + BLOCK] for i in range(0, len(full), BLOCK)]
 
     return {
         "id": SEP.join(blocks),
         "compact": full,
+        "short": short_code(producer, iso_date, company, port_n, site),
         "canonical": canon,
         "date_segment": body[2:5],
         "decoded_date": decode_date_segment(body[2:5], ref_iso=iso_date),
-        "fields": {"producer": producer, "date": iso_date, "location": location,
-                   "company": company, "serial": serial},
+        "fields": {"producer": producer, "date": iso_date, "location": iso_location,
+                   "company": company, "serial": serial, "port": port_n, "site": site},
     }
 
 
@@ -256,7 +330,13 @@ def verify_checksum(raw_id: str, secret: str | None = None) -> bool:
         return False
     if any(ch not in ALPHABET for ch in compact):
         return False
-    if compact[2] not in WEEK_CODES or compact[3] not in MONTH_CODES or compact[4] not in WEEKDAY_CODES:
+    if compact[2] not in ALPHABET[:5]:                 # неделя в месяце 1..5
+        return False
+    if compact[3] not in MONTH_CODES or compact[4] not in WEEKDAY_CODES:
+        return False
+    if compact[7] not in "ABC":                        # порт TN_A/TN_B/TN_C
+        return False
+    if compact[8] not in SITE_CODES:                   # номер площадки
         return False
     body, check = compact[:BODY_LEN], compact[BODY_LEN:]
     return checksum(body, secret) == check
@@ -268,11 +348,19 @@ def extract_parts(raw_id: str) -> dict:
     parts = {
         "producer_prefix": c[0:2],
         "date_segment": c[2:5],
-        "hash": c[5:BODY_LEN],
+        "company_abbr": c[5:7],
+        "port": c[7],
+        "site": c[8],
+        "hash": c[9:BODY_LEN],
         "checksum": c[BODY_LEN:],
     }
     try:
         parts["date_decoded"] = decode_date_segment(c[2:5])
     except ValueError:
         parts["date_decoded"] = None
+    try:
+        parts["site_number"] = decode_site(c[8])
+    except ValueError:
+        parts["site_number"] = None
+    parts["port_name"] = {v: k for k, v in PORT_CODES.items()}.get(c[7])
     return parts
