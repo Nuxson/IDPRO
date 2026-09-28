@@ -22,12 +22,11 @@ SECRET = os.environ.get("IDGEN_SECRET") or None  # необязательный 
 
 class IdInput(BaseModel):
     producer: str = Field(..., min_length=1, description="Производитель")
-    date: str = Field(..., min_length=5, description="Дата (ДД.ММ.ГГГГ / DD:MM:YYYY)")
     location: str = Field(..., min_length=1, description="Место положения")
     company: str = Field(..., min_length=1, description="Компания")
     serial: str = Field(..., min_length=1, description="Серийный номер")
     port: str = Field(..., min_length=1, description="Порт: TN_A / TN_B / TN_C")
-    site: str = Field(..., min_length=1, description="Номер площадки (1..99)")
+    site: str = Field(..., min_length=1, description="Номер площадки (0..99999)")
 
 
 @app.on_event("startup")
@@ -37,9 +36,9 @@ def _startup() -> None:
 
 @app.post("/api/generate")
 def generate(data: IdInput):
-    """Генерирует ID формата v3 и сохраняет его во внутреннюю базу."""
+    """Генерирует ID формата v4 (дата фиксируется автоматически) и сохраняет во внутреннюю базу."""
     try:
-        res = db.register(data.producer, data.date, data.location,
+        res = db.register(data.producer, data.location,
                           data.company, data.serial, data.port, data.site,
                           secret=SECRET)
     except ValueError as e:
@@ -51,7 +50,7 @@ def generate(data: IdInput):
 def preview(data: IdInput):
     """Показывает ID без сохранения в базу."""
     try:
-        rec = make_id(data.producer, data.date, data.location,
+        rec = make_id(data.producer, data.location,
                       data.company, data.serial, data.port, data.site,
                       secret=SECRET)
     except ValueError as e:

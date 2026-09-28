@@ -1,33 +1,36 @@
 """
-Формат ID v3 — читаемый код вида «PP + DWC + CC + порт + площадка + хеш + CRC».
+Формат ID v4 — читаемый код вида «PP + DWC + CC + порт + площадка + хеш + CRC».
 
 Пример короткого кода: ER2HF-MS-A-6
-  Ericsson, 2-я неделя августа, пятница (07.08.2026), компания Масштаб-Связь (MS),
-  порт TN_A (A), номер площадки 6 (код '7').
+  Ericsson, 2-я неделя августа, пятница (дата подставляется автоматически при
+  генерации — сегодня; при проверке восстанавливается из внутренней базы),
+  компания Масштаб-Связь (MS), порт TN_A (A), номер площадки 6 (код '7').
 
 Разбор компактного кода (до контрольного кода):
   [0:2]  PP   — код производителя (транслит; Ericsson -> ER)
   [2:5]  DWC  — дата: D = номер недели в месяце (дни 1–7 = 1, 8–14 = 2 ...),
                W = месяц (B=Январь ... Q=Декабрь),
                C = день недели (A=Понедельник ... F=Пятница, G=Воскресенье).
-               Ввод даты — ДД.ММ.ГГГГ (DD.MM.YYYY / DD:MM:YYYY)
+               Поле «дата» больше НЕ вводится пользователем — оно фиксируется
+               автоматически в момент генерации и хранится во внутренней базе.
   [5:7]  CC   — читаемое сокращение компании по инициалам слов
                (Масштаб-Связь -> MS; нечитаемые символы заменяются на Q)
   [7]    S    — порт: TN_A -> A, TN_B -> B, TN_C -> C
-  [8]    S    — номер площадки из алфавита base31: 1->'2', ..., 9->'A', 14->'J'
+  [8:13] S    — номер площадки, base31, ровно 5 символов (0 .. 99999):
+               6 -> '22228', 42 -> '2223D'; читается как младшие цифры номера.
 
 Все символы ID принадлежат алфавиту base31 (без неоднозначных 0/O, 1/I/L, U, Y),
-поэтому офлайн-проверка отлавливает любую опечатку. Символы недель/месяцев/дней/
-площадок читаются по справочникам выше; точная дата и все поля восстанавливаются
-по внутренней базе (lookup по коду).
+поэтому офлайн-проверка отлавливает любую опечатку. Символы недель/месяцев/дней
+читаются по справочникам выше; точная дата, точный номер площадки и остальные
+поля восстанавливаются по внутренней базе (lookup по коду).
 
 Далее:
-  хеш-часть   — SHA-256 от канонической строки полей v3 (base31, 6 симв.) —
+  хеш-часть   — SHA-256 от канонической строки полей v4 (base31, 6 симв.) —
                 кодирует место положения и серийный номер (уникальность);
   контрольный — HMAC-SHA256 от тела ID (аналог CRC/IMEI), офлайн-проверка.
 
-Полный вид с группировкой по 4 символа: ER2H-FMSA-6XXX-XXXX-YY
-(где XXXX... — хеш, YY — контрольный код).
+Полный вид с группировкой по 4 символа: ER2H-FMSA-22228-HASH-XXYZ
+(префикс 13 + хеш 6 + CRC 2 = 21 символ).
 """
 
 from __future__ import annotations
@@ -40,7 +43,6 @@ from datetime import date
 # ---------- Справочники ----------
 MONTH_CODES = "BCDEFGHJKLMNPQ"        # месяц: B=Январь ... Q=Декабрь (алфавит без 0/O,1/I,L,U,Y)
 WEEKDAY_CODES = "ABCDEFG"             # день недели: A=Понедельник ... F=Пятница, G=Воскресенье
-SITE_CODES = "23456789ABCDEFGHJ"      # номер площадки: 1->'2', ..., 9->'A', 10->'B' ... 14->'J'
 PORT_CODES = {"TN_A": "A", "TN_B": "B", "TN_C": "C"}   # порт -> буква
 
 ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"           # base31 (нет 0/O, 1/I/L, U, Y)
@@ -50,9 +52,10 @@ SEP = "-"
 BLOCK = 4
 HASH_LEN = 6
 CHECK_LEN = 2
-PREFIX_LEN = 9                                            # PP + DWC + CC + порт + площадка
-BODY_LEN = PREFIX_LEN + HASH_LEN                          # 15
-TOTAL_LEN = BODY_LEN + CHECK_LEN                          # 17
+SITE_LEN = 5                                          # номер площадки: ровно 5 символов base31
+PREFIX_LEN = 2 + 3 + 2 + 1 + SITE_LEN                 # PP+DWC+CC+порт+площадка = 13
+BODY_LEN = PREFIX_LEN + HASH_LEN                      # 19
+TOTAL_LEN = BODY_LEN + CHECK_LEN                      # 21
 
 # Читаемые коды производителей по умолчанию (расширяются без смены формата).
 PRODUCER_ALIASES = {
@@ -153,29 +156,27 @@ def port_code(port: str) -> str:
 
 
 def site_code(site: str) -> str:
-    """Код номера площадки: цифры читаются в ID напрямую (5 -> '5', 7 -> '7').
+    """Код номера площадки: ровно 5 символов base31, диапазон 0..99999.
 
-    Двухзначные номера кодируются по модулю алфавита base31 (14 -> 'E'),
-    чтобы все символы ID оставались в допустимом алфавите. Диапазон 1..99.
+    6 -> '22228', 42 -> '2223D', 0 -> '22222'. Младшие символы читаются как
+    номер; точное значение всегда восстанавливается из внутренней базы.
     """
     s = _norm(site).replace(" ", "")
     s = re.sub(r"^(НОМЕР|NOMER|NO|#)", "", s) or s
-    try:
-        num = int(s)
-    except ValueError:
-        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается число 1..99)")
-    if not 1 <= num <= 99:
-        raise ValueError(f"Номер площадки вне диапазона 1..99: {site!r}")
-    return ALPHABET[(num - 1) % BASE]
+    if not re.fullmatch(r"\d+", s):
+        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается число 0..99999)")
+    num = int(s)
+    if not 0 <= num <= 99999:
+        raise ValueError(f"Номер площадки вне диапазона 0..99999: {site!r}")
+    return to_base31(num, SITE_LEN)
 
 
 def decode_site(code: str) -> int:
-    """Приблизительный обратный разбор кода площадки ('5' -> 5, 'E' -> 14/45/76).
-
-    Точный номер восстанавливается только по внутренней базе (по хеш-части);
-    для однозначных номеров код читается напрямую.
-    """
-    return ALPHABET.index(code.upper()) + 1
+    """Обратный разбор 5-символьного кода площадки ('22228' -> 6, '2223D' -> 42)."""
+    n = 0
+    for ch in code.upper():
+        n = n * BASE + ALPHABET.index(ch)
+    return n
 
 
 def week_symbol(week_in_month: int) -> str:
@@ -302,23 +303,29 @@ def checksum(body: str, secret: str | None = None) -> str:
 
 def canonical_string(producer: str, iso_date: str, location: str, company: str,
                      serial: str, port: str, site: str) -> str:
-    """Каноническая строка формата v3 (версия зафиксирована в префиксе 'v3')."""
-    return "|".join(["v3", producer, iso_date, location, company, serial, port, site])
+    """Каноническая строка формата v4 (версия зафиксирована в префиксе 'v4')."""
+    return "|".join(["v4", producer, iso_date, location, company, serial, port, site])
 
 
 def short_code(producer: str, iso_date: str, company: str, port: str, site: str) -> str:
-    """Короткий читаемый код вида ER1AF-MS-A-N (без хеша и CRC) — для площадок/журналов."""
+    """Короткий читаемый код вида ER2HF-MS-A-6 (без хеша и CRC) — для площадок/журналов."""
     return SEP.join([
         producer_code(producer) + date_segment(iso_date),
         company_abbr(company),
         port_code(port),
-        site_code(site),
+        str(decode_site(site_code(site))),
     ])
 
 
-def make_id(producer: str, dt: str, location: str, company: str, serial: str,
-            port: str, site: str, secret: str | None = None) -> dict:
-    """Генерирует читаемый ID формата v3. Детерминирован: те же данные → тот же ID."""
+def make_id(producer: str, location: str, company: str, serial: str,
+            port: str, site: str, secret: str | None = None,
+            dt: str | None = None) -> dict:
+    """Генерирует читаемый ID формата v4. Детерминирован: те же данные → тот же ID.
+
+    Дата НЕ запрашивается у пользователя: фиксируется автоматически (сегодня)
+    в момент генерации и сохраняется во внутренней базе; при проверке кода
+    точная дата восстанавливается из базы. Параметр `dt` — служебный (тесты).
+    """
     producer, iso_location, company, serial, site = (
         _norm(x) for x in (producer, location, company, serial, site))
     port_n = _norm(port)
@@ -327,7 +334,7 @@ def make_id(producer: str, dt: str, location: str, company: str, serial: str,
                                       ("порт", port_n), ("номер площадки", site)) if not val]
     if missing:
         raise ValueError("Заполните поля: " + ", ".join(missing))
-    iso_date = norm_date(dt)
+    iso_date = norm_date(dt) if dt else date.today().isoformat()
 
     canon = canonical_string(producer, iso_date, iso_location, company, serial, port_n, site)
     hash_part = to_base31(int(hashlib.sha256(canon.encode()).hexdigest()[:16], 16), HASH_LEN)
@@ -368,8 +375,6 @@ def verify_checksum(raw_id: str, secret: str | None = None) -> bool:
         return False
     if compact[7] not in "ABC":                        # порт TN_A/TN_B/TN_C
         return False
-    if compact[8] not in SITE_CODES:                   # номер площадки
-        return False
     body, check = compact[:BODY_LEN], compact[BODY_LEN:]
     return checksum(body, secret) == check
 
@@ -382,8 +387,8 @@ def extract_parts(raw_id: str) -> dict:
         "date_segment": c[2:5],
         "company_abbr": c[5:7],
         "port": c[7],
-        "site": c[8],
-        "hash": c[9:BODY_LEN],
+        "site_code": c[8:PREFIX_LEN],
+        "hash": c[PREFIX_LEN:BODY_LEN],
         "checksum": c[BODY_LEN:],
     }
     try:
@@ -391,7 +396,7 @@ def extract_parts(raw_id: str) -> dict:
     except ValueError:
         parts["date_decoded"] = None
     try:
-        parts["site_number"] = decode_site(c[8])
+        parts["site_number"] = decode_site(c[8:PREFIX_LEN])
     except ValueError:
         parts["site_number"] = None
     parts["port_name"] = {v: k for k, v in PORT_CODES.items()}.get(c[7])

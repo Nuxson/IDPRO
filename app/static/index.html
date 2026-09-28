@@ -40,8 +40,6 @@
       <form id="genForm">
         <label>Производитель</label>
         <input name="producer" placeholder="напр. Роботех" required>
-        <label>Дата (ДД.ММ.ГГГГ или DD:MM:YYYY)</label>
-        <input name="date" placeholder="напр. 07:08:2026" pattern="\\d{1,2}[.:]\\d{1,2}[.:]\\d{4}|\\d{4}-\\d{2}-\\d{2}" title="Формат: ДД.ММ.ГГГГ, DD:MM:YYYY или ГГГГ-ММ-ДД" required>
         <label>Место положения</label>
         <input name="location" placeholder="напр. Москва" required>
         <label>Компания</label>
@@ -52,19 +50,19 @@
         <select name="port" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--txt);font-size:1rem">
           <option value="TN_A">TN_A</option><option value="TN_B">TN_B</option><option value="TN_C">TN_C</option>
         </select>
-        <label>Номер площадки</label>
-        <input name="site" type="number" min="1" max="99" placeholder="напр. 6" required>
+        <label>Номер площадки (0–99999)</label>
+        <input name="site" type="number" min="0" max="99999" step="1" placeholder="напр. 6 или 1024" required>
         <button type="submit">Сгенерировать и сохранить</button>
       </form>
       <div class="result" id="genResult"></div>
-      <div class="hint">ID детерминирован: одинаковые данные → одинаковый код. Читаемая часть: ER — Ericsson, 2HF — 2-я неделя августа, пятница, MS — Масштаб-Связь, A — порт TN_A, площадка. Повторное сохранение вернёт существующий ID.</div>
+      <div class="hint">Дата не вводится — фиксируется автоматически в момент генерации и сохраняется во внутренней базе (при проверке восстанавливается по коду). ID детерминирован: одинаковые данные → одинаковый код. Читаемая часть: ER — Ericsson, 2HF — 2-я неделя августа, пятница, MS — Масштаб-Связь, A — порт TN_A, площадка. Повторное сохранение вернёт существующий ID.</div>
     </div>
 
     <div class="card">
       <h2>Проверить ID</h2>
       <form id="verForm">
         <label>Код для проверки</label>
-        <input name="id" placeholder="напр. ER2H-FMSA-6XXX-XXXX-YY" required style="letter-spacing:1px">
+        <input name="id" placeholder="напр. ER2H-FMSA-2222-8XXX-XXXX-YZ" required style="letter-spacing:1px">
         <button type="submit">Проверить</button>
       </form>
       <div class="result" id="verResult"></div>

@@ -1,10 +1,12 @@
 """CLI для генерации и проверки ID без веб-интерфейса.
 
 Примеры:
-    python cli.py generate --producer "Эрикссон" --date 07:08:2026 \
+    python cli.py generate --producer "Эрикссон" \
         --location "Москва" --company "Масштаб-Связь" --serial SN-00123 \
         --port TN_A --site 6
-    python cli.py verify RQTE-MQ9Q-HSEW-FG
+    python cli.py verify ER2H-FMSA-22228-XXXX-XXYZ
+    (дата не вводится — фиксируется автоматически при генерации и
+     восстанавливается из внутренней базы при проверке)
 """
 
 from __future__ import annotations
@@ -18,20 +20,22 @@ from app.idgen import extract_parts, make_id, verify_checksum
 
 def cmd_generate(args):
     db.init_db()
-    res = db.register(args.producer, args.date, args.location, args.company,
+    res = db.register(args.producer, args.location, args.company,
                       args.serial, args.port, args.site)
     rec = res["record"]
     print(f"ID:            {rec['id']}")
-    print(f"Короткий код:  {make_id(args.producer, args.date, args.location, args.company, args.serial, args.port, args.site)['short']}")
+    print(f"Короткий код:  {make_id(rec['producer'], rec['location'], rec['company'], rec['serial'], rec['port'], rec['site'], dt=rec['date'])['short']}")
+    print(f"Дата (авто):   {rec['date']}")
     print(f"Каноническая:  {rec['canonical']}")
     print(f"Статус:        {'создан новый' if res['created'] else 'уже существовал в базе'}")
 
 
 def cmd_preview(args):
-    rec = make_id(args.producer, args.date, args.location, args.company,
+    rec = make_id(args.producer, args.location, args.company,
                   args.serial, args.port, args.site)
     print(f"ID:       {rec['id']}")
     print(f"Короткий: {rec['short']}")
+    print(f"Дата (авто): {rec['fields']['date']}")
 
 
 def cmd_verify(args):
@@ -58,14 +62,13 @@ def build_parser():
 
     def add_gen(sp):
         sp.add_argument("--producer", required=True, help="Производитель")
-        sp.add_argument("--date", required=True, help="Дата (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)")
         sp.add_argument("--location", required=True, help="Место положения")
         sp.add_argument("--company", required=True, help="Компания")
         sp.add_argument("--serial", required=True, help="Серийный номер")
         sp.add_argument("--port", required=True, help="Порт: TN_A / TN_B / TN_C")
-        sp.add_argument("--site", required=True, help="Номер площадки (1..99)")
+        sp.add_argument("--site", required=True, help="Номер площадки (0..99999)")
 
-    g = sub.add_parser("generate", help="Сгенерировать ID и сохранить в базу")
+    g = sub.add_parser("generate", help="Сгенерировать ID и сохранить в базу (дата — автоматически)")
     add_gen(g); g.set_defaults(func=cmd_generate)
 
     v = sub.add_parser("preview", help="Сгенерировать ID без сохранения")
