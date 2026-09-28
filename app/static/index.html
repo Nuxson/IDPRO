@@ -16,6 +16,7 @@
   label { display:block; font-size:.85rem; margin:10px 0 4px; color:#94a3b8; }
   input { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:var(--txt); font-size:1rem; }
   input:focus { outline:none; border-color:var(--accent); }
+  select, textarea { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:var(--txt); font-size:1rem; }
   button { margin-top:14px; width:100%; padding:11px; border:none; border-radius:8px; background:var(--accent); color:#082f49; font-weight:700; font-size:1rem; cursor:pointer; }
   button:hover { filter:brightness(1.1); }
   .result { margin-top:14px; padding:12px; border-radius:8px; background:#0f172a; font-family:Consolas,monospace; word-break:break-all; display:none; }
@@ -38,16 +39,16 @@
     <div class="card">
       <h2>Создать ID</h2>
       <form id="genForm">
-        <label>Производитель</label>
-        <input name="producer" placeholder="напр. Роботех" required>
+        <label>Производитель (из справочника config/producers.json)</label>
+        <select name="producer" required></select>
         <label>Место положения</label>
         <input name="location" placeholder="напр. Москва" required>
-        <label>Компания</label>
-        <input name="company" placeholder="напр. Технопарк" required>
+        <label>Компания (из справочника config/companies.json)</label>
+        <select name="company" required></select>
         <label>Серийный номер</label>
         <input name="serial" placeholder="напр. SN-00123" required>
         <label>Порт</label>
-        <select name="port" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--txt);font-size:1rem">
+        <select name="port">
           <option value="TN_A">TN_A</option><option value="TN_B">TN_B</option><option value="TN_C">TN_C</option>
         </select>
         <label>Номер площадки</label>
@@ -55,14 +56,35 @@
         <button type="submit">Сгенерировать и сохранить</button>
       </form>
       <div class="result" id="genResult"></div>
-      <div class="hint">Дата не вводится — фиксируется автоматически в момент генерации и сохраняется во внутренней базе (при проверке восстанавливается по коду). ID детерминирован: одинаковые данные → одинаковый код. Читаемая часть: ER — Ericsson, 2HF — 2-я неделя августа, пятница, MS — Масштаб-Связь, A — порт TN_A, площадка. Повторное сохранение вернёт существующий ID.</div>
+      <div class="hint">Дата не вводится — фиксируется автоматически в момент генерации и сохраняется во внутренней базе (при проверке восстанавливается по коду). ID детерминирован: одинаковые данные → одинаковый код. Читаемая часть: первые 2 символа — код производителя из справочника, далее 3 символа — дата (месяц B=Январь…Q=Декабрь, день A=Пн…G=Вс), 2 символа — код компании из справочника, буква — порт TN_A/TN_B/TN_C, следующие 4 символа — номер площадки. Повторное сохранение вернёт существующий ID.</div>
+    </div>
+
+    <div class="card">
+      <h2>Справочники кодов</h2>
+      <form id="codesForm">
+        <label>Что добавляем</label>
+        <select name="kind">
+          <option value="producers">Производители (config/producers.json)</option>
+          <option value="companies">Компании (config/companies.json)</option>
+        </select>
+        <label>Как задаём код</label>
+        <select name="mode">
+          <option value="auto">Авто — программа сама сгенерирует код по названию</option>
+          <option value="manual">Вручную — Название=КД (2 символа)</option>
+        </select>
+        <label>Названия (через запятую; для «вручную» — вид: Ромашка=RK, Вектор=VK)</label>
+        <textarea name="names" rows="3" placeholder="Ромашка-Завод, Вектор-Телеком"></textarea>
+        <button type="submit">Сохранить в конфиг</button>
+      </form>
+      <div class="result" id="codesResult"></div>
+      <div class="hint">JSON-конфиги создаются программой автоматически при первом запуске (или командой python cli.py codes-init) и хранятся в папке config/. При генерации ID готовые коды подставляются в код; если имени нет в справочнике — программа сообщит об ошибке.</div>
     </div>
 
     <div class="card">
       <h2>Проверить ID</h2>
       <form id="verForm">
         <label>Код для проверки</label>
-        <input name="id" placeholder="напр. ER2J-EMSC-223D-C5K6-MEUD" required style="letter-spacing:1px">
+        <input name="id" placeholder="напр. RM4KF-VT-A2238-HYEQ" required style="letter-spacing:1px">
         <button type="submit">Проверить</button>
       </form>
       <div class="result" id="verResult"></div>

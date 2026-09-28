@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db
-from .idgen import extract_parts, make_id, verify_checksum
+from .codes import CodesError, ensure_configs, load_codes as load_codes_raw, registry, save_codes
+from .idgen import extract_parts, make_id, suggest_code, verify_checksum
 
 app = FastAPI(title="Unique ID Generator", version="1.0")
 
@@ -21,22 +22,28 @@ SECRET = os.environ.get("IDGEN_SECRET") or None  # необязательный 
 
 
 class IdInput(BaseModel):
-    producer: str = Field(..., min_length=1, description="Производитель")
+    producer: str = Field(..., min_length=1, description="Производитель (из config/producers.json)")
     location: str = Field(..., min_length=1, description="Место положения")
-    company: str = Field(..., min_length=1, description="Компания")
+    company: str = Field(..., min_length=1, description="Компания (из config/companies.json)")
     serial: str = Field(..., min_length=1, description="Серийный номер")
     port: str = Field(..., min_length=1, description="Порт: TN_A / TN_B / TN_C")
     site: str = Field(..., min_length=1, description="Номер площадки (целое число)")
 
 
+class CodesInput(BaseModel):
+    codes: dict[str, str] = Field(..., description='{"Название": "КД"} — 2 символа из алфавита base31')
+
+
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    ensure_configs()          # генерируем JSON-справочники, если их ещё нет
+    registry.reload()         # перечитываем справочники с диска
 
 
 @app.post("/api/generate")
 def generate(data: IdInput):
-    """Генерирует ID формата v4 (дата фиксируется автоматически) и сохраняет во внутреннюю базу."""
+    """Генерирует ID формата v6 (дата фиксируется автоматически) и сохраняет во внутреннюю базу."""
     try:
         res = db.register(data.producer, data.location,
                           data.company, data.serial, data.port, data.site,
@@ -93,6 +100,60 @@ def verify(id: str = Query(..., description="Код для проверки")):
 @app.get("/api/list")
 def list_records(limit: int = Query(100, ge=1, le=1000)):
     return db.list_ids(limit)
+
+
+# ---------- Справочники кодов (JSON-конфиги) ----------
+
+def _validate_codes(codes: dict[str, str]) -> dict[str, str]:
+    """Проверяет и нормализует пары {название: код}; возвращает готовые к записи."""
+    from .codes import ALPHABET as A
+    out: dict[str, str] = {}
+    for name, code in codes.items():
+        name = " ".join(str(name).split())
+        code = str(code).strip().upper()
+        if not name:
+            raise HTTPException(400, "Пустое название в справочнике")
+        if len(code) != 2 or any(ch not in A for ch in code):
+            raise HTTPException(
+                400, f"Код {code!r} для «{name}» некорректен: нужно ровно 2 символа "
+                     f"из алфавита {A} (без неоднозначных 0/O, 1/I/L)")
+        out[name] = code
+    return out
+
+
+@app.get("/api/codes")
+def get_codes():
+    """Текущее содержимое обоих справочников."""
+    registry.reload()
+    return {"producers": registry.producers, "companies": registry.companies}
+
+
+@app.post("/api/codes/{kind}/add")
+def add_codes(kind: str, data: CodesInput):
+    """Добавляет/обновляет записи в справочнике. kind: producers | companies."""
+    path = registry.producers_path if kind == "producers" else (
+        registry.companies_path if kind == "companies" else None)
+    if path is None:
+        raise HTTPException(404, "kind должен быть producers или companies")
+    added = _validate_codes(data.codes)
+    current = dict(load_codes_raw(path))
+    current.update(added)
+    save_codes(path, current)
+    registry.reload()
+    return {"file": str(path), "added": added, "total": len(current)}
+
+
+@app.post("/api/codes/generate")
+def generate_codes(data: CodesInput):
+    """Генерирует коды сам: по первым буквам названия (транслит кириллицы).
+
+    Например «Ромашка-Завод» -> RZ, «Вектор-Телеком» -> VT. Если букв не
+    хватает или они неоднозначны — берёт детерминированный код из хеша имени.
+    Возвращает готовые пары {название: код} (в файл НЕ пишет — их можно
+    отправить через /api/codes/{kind}/add).
+    """
+    result = {name.strip(): suggest_code(name) for name in data.codes if name.strip()}
+    return {"generated": result}
 
 
 @app.get("/")

@@ -1,10 +1,15 @@
 """CLI для генерации и проверки ID без веб-интерфейса.
 
+Перед первым использованием создайте справочники кодов (JSON-конфиги):
+    python cli.py codes-init            # создаст config/producers.json и companies.json
+После этого впишите свои названия и коды, например:
+    "Ромашка-Завод": "RZ"  (в producers.json),  "Вектор-Телеком": "VT" (в companies.json)
+
 Примеры:
-    python cli.py generate --producer "Эрикссон" \
-        --location "Москва" --company "Масштаб-Связь" --serial SN-00123 \
+    python cli.py generate --producer "Ромашка-Завод" \
+        --location "Москва" --company "Вектор-Телеком" --serial SN-00123 \
         --port TN_A --site 6
-    python cli.py verify ER2H-FMSA-22228-XXXX-XXYZ
+    python cli.py verify RZ4KF-VT-A2238HYEQ
     (дата не вводится — фиксируется автоматически при генерации и
      восстанавливается из внутренней базы при проверке)
 """
@@ -15,7 +20,20 @@ import argparse
 import sys
 
 from app import db
+from app.codes import ensure_configs
 from app.idgen import extract_parts, make_id, verify_checksum
+
+
+def cmd_codes_init(args):
+    files = ensure_configs(force=args.force)
+    if args.force:
+        print("Справочники перезаписаны шаблонами:")
+    else:
+        print("Справочники созданы (существующие не тронуты):")
+    for name, path in files.items():
+        print(f"  {name}: {path}")
+    print("Заполните их своими названиями и кодами (2 символа из алфавита base31).")
+    return 0
 
 
 def cmd_generate(args):
@@ -59,6 +77,11 @@ def cmd_verify(args):
 def build_parser():
     p = argparse.ArgumentParser(description="Генератор уникальных ID")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    ci = sub.add_parser("codes-init",
+                        help="Создать JSON-справочники config/producers.json и companies.json")
+    ci.add_argument("--force", action="store_true", help="Перезаписать существующие шаблонами")
+    ci.set_defaults(func=cmd_codes_init)
 
     def add_gen(sp):
         sp.add_argument("--producer", required=True, help="Производитель")

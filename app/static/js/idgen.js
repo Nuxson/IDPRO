@@ -1,24 +1,28 @@
 /**
  * idgen.js — JS-порт ядра генерации уникальных ID (работает в браузере и Node.js).
  *
- * Полностью совместим с Python-версией app/idgen.py: те же входные данные → тот же код.
- * Формат ID v4: PP DWC CC порт площадка(4) + хеш(6) + CRC(2) = 20 символов, 5 блоков по 4.
+ * Полностью совместим с Python-версией app/idgen.py: те же входные данные + тот же
+ * справочник кодов → тот же код. Формат ID v6: PP DWC CC порт площадка(4) + хеш(3) + CRC(2)
+ * = 17 символов, группировка XXXX-XXXX-XXXX-XXX.
  *
  * Состав компактного кода:
- *   [0:2]  PP     — код производителя (транслит; Ericsson/Эрикссон -> ER)
- *   [2:5]  DWC    — дата: D = неделя в месяце (дни 1-7 = 1 ...), W = месяц (B=Январь..Q=Декабрь),
- *                  C = день недели (A=Понедельник..F=Пятница, G=Воскресенье).
- *                  Дата НЕ вводится пользователем: фиксируется автоматически (сегодня)
- *                  при генерации и хранится во внутренней базе.
- *   [5:7]  CC     — сокращение компании по инициалам слов (Масштаб-Связь -> MS)
- *   [7]    S      — порт: TN_A -> A, TN_B -> B, TN_C -> C
- *   [8:12] SSSS   — номер площадки base31, 4 символа (0..923520): 6 -> '2228'
- *   [13:19]       — хеш SHA-256 от канонической строки v4 (место + серийный и др.)
- *   [19:21]       — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
+ *   [0:2]   PP    — код производителя ИЗ СПРАВОЧНИКА config/producers.json
+ *                   (браузер подгружает его через GET /api/codes; офлайн-режим
+ *                   принимает готовый объект {Название: "КД"})
+ *   [2:5]   DWC   — дата: D = неделя в месяце (дни 1-7 = 1 ...), W = месяц (B=Январь..Q=Декабрь),
+ *                   C = день недели (A=Понедельник..F=Пятница, G=Воскресенье).
+ *                   Дата НЕ вводится пользователем: фиксируется автоматически (сегодня)
+ *                   при генерации и хранится во внутренней базе.
+ *   [5:7]   CC    — сокращение компании ИЗ СПРАВОЧНИКА config/companies.json
+ *   [7]     S     — порт: TN_A -> A, TN_B -> B, TN_C -> C
+ *   [8:12]  SSSS  — номер площадки compact-алфавита, 4 символа (0..99999): 6 -> '2228', 42 -> '223A'
+ *   [12:15] HHH   — хеш SHA-256 от канонической строки v6 (место + серийный и др.)
+ *   [15:17] CC    — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
  *
  * Использование (браузер):
- *   const res = await IdGen.makeId({ producer:'Ericsson',
- *       location:'Москва', company:'Масштаб-Связь', serial:'SN-00123', port:'TN_A', site:'6' });
+ *   await IdGen.loadCodes();            // загружает справочники с сервера
+ *   const res = await IdGen.makeId({ producer:'Ромашка-Завод',
+ *       location:'Москва', company:'Вектор-Телеком', serial:'SN-00123', port:'TN_A', site:'6' });
  *   const ok  = await IdGen.verifyChecksum(res.id);
  */
 (function (global, factory) {
@@ -31,33 +35,47 @@
   'use strict';
 
   // ---------- Константы (идентичны idgen.py) ----------
-  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; // без неоднозначных 0/O, 1/I/L
+  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; // base31: без неоднозначных 0/O, 1/I/L, U, Y
   const BASE = ALPHABET.length;                      // 31
+  const ALNUM36 = '23456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'; // сжатые сегменты: без 0/O, 1/I/L
+  const BASE36 = ALNUM36.length;                     // 34
   const SEP = '-';
-  const BLOCK = 4;
+  const GROUPS = [4, 4, 4, 3];                        // XXXX-XXXX-XXXX-XXX
   const CHECK_LEN = 2;
-  const HASH_LEN = 6;
-  const SITE_LEN = 4;                                 // номер площадки: 4 символа base31 (0..923520)
+  const HASH_LEN = 3;                                 // хеш: 3 символа compact-алфавита
+  const SITE_LEN = 4;                                 // площадка: 4 символа compact-алфавита (0..99999)
+  const SITE_MAX = 99999;
   const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 12
-  const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 19
-  const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 21
+  const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 15
+  const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 17
+  const FORMAT_VERSION = 'v6';
 
   const MONTH_CODES = 'BCDEFGHJKLMNPQ';               // B=Январь ... Q=Декабрь
   const WEEKDAY_CODES = 'ABCDEFG';                    // A=Понедельник ... F=Пятница, G=Вс
   const PORT_CODES = { TN_A: 'A', TN_B: 'B', TN_C: 'C' };
-  const PRODUCER_ALIASES = {
-    ERICSSON: 'ER', NOKIA: 'NO', SIEMENS: 'SI', HUAWEI: 'HW', SAMSUNG: 'SA', ROBOTECH: 'RQ',
-  };
-  const COMPANY_ALIASES = { 'МАСШТАБ-СВЯЗЬ': 'MS', 'MASHTAB-SVYAZ': 'MS', 'MASHATAB-SVYAZ': 'MS' };
 
-  // Таблица транслита — идентична _TMAP из idgen.py
-  const TMAP = {
-    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E',
-    'Ж': 'Z', 'З': 'Z', 'И': 'I', 'Й': 'I', 'К': 'K', 'Л': 'L', 'М': 'M',
-    'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
-    'Ф': 'F', 'Х': 'H', 'Ц': 'C', 'Ч': 'CH', 'Ш': 'SH', 'Щ': 'SCH', 'Ъ': '',
-    'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'JU', 'Я': 'JA',
-  };
+  // Справочники кодов (config/producers.json и config/companies.json на сервере).
+  // В браузере заполняются через loadCodes() (GET /api/codes); в Node/тестах —
+  // setCodes({producers:{...}, companies:{...}}). Программа не содержит названий
+  // брендов — соответствия «название -> код» задаёт только пользователь.
+  let CODES = { producers: {}, companies: {} };
+
+  function setCodes(codes) {
+    CODES = {
+      producers: Object.fromEntries(Object.entries(codes?.producers || {})
+        .map(([k, v]) => [norm(k), String(v).toUpperCase()])),
+      companies: Object.fromEntries(Object.entries(codes?.companies || {})
+        .map(([k, v]) => [norm(k), String(v).toUpperCase()])),
+    };
+    return CODES;
+  }
+
+  async function loadCodes(url = '/api/codes') {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('Не удалось загрузить справочники кодов');
+    return setCodes(await r.json());
+  }
+
 
   // ---------- Хеш-примитивы: WebCrypto (основной путь), чистый JS (фолбэк для Node) ----------
   async function sha256Bytes(bytes) {
@@ -144,33 +162,19 @@
 
   // ---------- Утилиты нормализации (1-в-1 с Python) ----------
   const norm = (v) => String(v ?? '').trim().toUpperCase().split(/\s+/).filter(Boolean).join(' ');
-  const translit = (s) => [...s].map(ch => TMAP[ch] ?? ch).join('');
 
-  // Только символы алфавита base31 (как _readable в Python): Эрикссон -> ER
-  const readable = (text) => [...translit(norm(text))].filter((ch) => ALPHABET.includes(ch)).join('');
-
-  async function producerCode(name) {
+  function producerCode(name) {
     const n = norm(name);
-    if (PRODUCER_ALIASES[n]) return PRODUCER_ALIASES[n];
-    const letters = readable(n);
-    if (letters.length >= 2) return letters.slice(0, 2);
-    // Детерминированный запасной путь — как в Python: sha256("v4p:"+n)[:4] -> base31(2).
-    // Асинхронный (WebCrypto), поэтому makeId вызывает его через await.
-    const d = await sha256Bytes(new TextEncoder().encode('v4p:' + n));
-    return toBase31(digestToBigint(d, 4), 2);
+    const code = CODES.producers[n];
+    if (!code) throw new Error(`Производитель «${name}» не найден в справочнике config/producers.json`);
+    return code;
   }
 
   function companyAbbr(name) {
     const n = norm(name);
-    if (COMPANY_ALIASES[n]) return COMPANY_ALIASES[n];
-    const tr = translit(n);
-    const words = tr.split(/[\s\-]+/).filter(Boolean);
-    const initials = words.map((w) => w[0]).join('');
-    let out = [...initials].filter((ch) => ALPHABET.includes(ch)).join('');
-    if (out.length < 2) {
-      for (const ch of readable(n)) { if (!out.includes(ch)) out += ch; if (out.length >= 2) break; }
-    }
-    return (out.slice(0, 2) + 'QQ').slice(0, 2);
+    const code = CODES.companies[n];
+    if (!code) throw new Error(`Компания «${name}» не найдена в справочнике config/companies.json`);
+    return code;
   }
 
   function portCode(port) {
@@ -186,18 +190,18 @@
     s = s.replace(/^(НОМЕР|NOMER|NO|#)/, '') || s;   // как в Python: re.sub(...) or s
     if (!/^\d+$/.test(s)) throw new Error(`Некорректный номер площадки: "${site}" (ожидается целое число)`);
     const num = Number(s);
-    if (!Number.isSafeInteger(num) || num < 0 || num >= BASE ** SITE_LEN) {
-      throw new Error(`Номер площадки вне диапазона 0..${BASE ** SITE_LEN - 1}: "${site}"`);
+    if (!Number.isSafeInteger(num) || num < 0 || num > SITE_MAX) {
+      throw new Error(`Номер площадки вне диапазона 0..${SITE_MAX}: "${site}"`);
     }
-    return toBase31(num, SITE_LEN);                   // 4 символа: 6 -> '2228', 42 -> '223D'
+    return toBase36(num, SITE_LEN);                   // 4 символа: 6 -> '2228', 42 -> '223A'
   }
 
-  function decodeSite(code4) {                        // обратный разбор: '2228' -> 6
+  function decodeSite(codeN) {                        // обратный разбор: '2228' -> 6
     let n = 0n;
-    for (const ch of String(code4).toUpperCase()) {
-      const idx = ALPHABET.indexOf(ch);
+    for (const ch of String(codeN).toUpperCase()) {
+      const idx = ALNUM36.indexOf(ch);
       if (idx < 0) throw new Error('Недопустимый символ кода площадки: ' + ch);
-      n = n * BigInt(BASE) + BigInt(idx);
+      n = n * BigInt(BASE36) + BigInt(idx);
     }
     return Number(n);
   }
@@ -226,31 +230,32 @@
     return `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
 
-  // Представление числа в base31 фиксированной длины (BigInt — точность как у Python int)
-  function toBase31(number, length) {
+  // Представление числа в алфавите фиксированной длины (BigInt — точность как у Python int)
+  function toBase(number, length, alphabet, base) {
     let n = BigInt(number);
     const out = [];
     for (let i = 0; i < length; i++) {
-      out.push(ALPHABET[Number(n % BigInt(BASE))]);
-      n /= BigInt(BASE);
+      out.push(alphabet[Number(n % BigInt(base))]);
+      n /= BigInt(base);
     }
     return out.reverse().join('');
   }
-
-  const canonicalString = (producer, isoDate, location, company, serial, port, site) =>
-    ['v4', producer, isoDate, location, company, serial, port, site].join('|');
-
-  // hexdigest[:16] из Python == первые 8 байт дайджеста, прочитанные как big-endian число
-  function digestToBigint(digest, bytes) {
+  const toBase31 = (number, length) => toBase(number, length, ALPHABET, BASE);
+  const toBase36 = (number, length) => toBase(number, length, ALNUM36, BASE36);
+  const digestToBigint = (digest, bytes) => {
     let num = 0n;
     for (const b of digest.slice(0, bytes)) num = (num << 8n) | BigInt(b);
     return num;
-  }
+  };
+
+  const canonicalString = (producer, isoDate, location, company, serial, port, site) =>
+    [FORMAT_VERSION, producer, isoDate, location, company, serial, port, site].join('|');
+
 
   async function checksum(body, secret = null) {
     const msg = new TextEncoder().encode(body);
     const digest = secret ? await hmacSha256(secret, msg) : await sha256Bytes(msg);
-    return toBase31(digestToBigint(digest, 4), CHECK_LEN);
+    return toBase36(digestToBigint(digest, 4), CHECK_LEN);
   }
 
   // ---------- Публичный API ----------
@@ -270,14 +275,15 @@
     const iso = date ? normDate(date) : localIsoToday();
 
     const digest = await sha256Bytes(new TextEncoder().encode(canonicalString(P, iso, L, C, S, PT, ST)));
-    const hashPart = toBase31(digestToBigint(digest, 8), HASH_LEN);
+    const hashPart = toBase36(digestToBigint(digest, 8), HASH_LEN);
 
     const sitePart = siteCode(ST);
-    const prefixPart = await producerCode(P) + dateSegment(iso) + companyAbbr(C) + portCode(PT) + sitePart;
+    const prefixPart = producerCode(P) + dateSegment(iso) + companyAbbr(C) + portCode(PT) + sitePart;
     const body = prefixPart + hashPart;
     const full = body + await checksum(body, secret);
     const blocks = [];
-    for (let i = 0; i < full.length; i += BLOCK) blocks.push(full.slice(i, i + BLOCK));
+    let pos = 0;
+    for (const size of GROUPS) { blocks.push(full.slice(pos, pos + size)); pos += size; }
 
     return {
       id: blocks.join(SEP),
@@ -302,7 +308,7 @@
   async function verifyChecksum(rawId, secret = null) {
     const compact = normalizeId(rawId);
     if (compact.length !== TOTAL_LEN) return false;
-    if ([...compact].some((ch) => !ALPHABET.includes(ch))) return false;
+    if ([...compact].some((ch) => !ALNUM36.includes(ch))) return false;
     if (!'23456'.includes(compact[2])) return false;                 // неделя в месяце 1..5
     if (!MONTH_CODES.includes(compact[3])) return false;             // месяц
     if (!WEEKDAY_CODES.includes(compact[4])) return false;           // день недели
@@ -315,7 +321,7 @@
                        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
   const WEEKDAY_NAMES = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
 
-  /** Разбор ID на читаемые составляющие (формат v4). */
+  /** Разбор ID на читаемые составляющие (формат v6). */
   function extractParts(rawId) {
     const c = normalizeId(rawId);
     const parts = {
@@ -338,7 +344,7 @@
       };
     } else parts.date_decoded = null;
     parts.port_name = Object.keys(PORT_CODES).find((k) => PORT_CODES[k] === parts.port) || null;
-    try { parts.site_number = decodeSite(parts.site_code); }
+    try { parts.site_number = c.length >= PREFIX_TOTAL ? decodeSite(parts.site_code) : null; }
     catch (e) { parts.site_number = null; }
     return parts;
   }
@@ -346,7 +352,8 @@
   return {
     ALPHABET, TOTAL_LEN, BODY_LEN, MONTH_CODES, WEEKDAY_CODES, PORT_CODES, SITE_LEN,
     makeId, verifyChecksum, normalizeId, extractParts, checksum,
-    canonicalString, toBase31, normDate, localIsoToday,
+    canonicalString, toBase31, toBase36, normDate, localIsoToday,
     producerCode, companyAbbr, portCode, siteCode, decodeSite, dateSegment,
+    setCodes, loadCodes, getCodes: () => CODES,
   };
 });
