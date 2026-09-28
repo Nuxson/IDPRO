@@ -12,7 +12,7 @@ DB_PATH = Path(__file__).resolve().parent.parent / "ids.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ids (
-    id          TEXT PRIMARY KEY,      -- сформированный код формата v3 (XXXX-XXXX-...)
+    id          TEXT PRIMARY KEY,      -- сформированный код формата v4 (XXXX-XXXX-...)
     compact     TEXT UNIQUE,           -- код без разделителей
     producer    TEXT NOT NULL,
     date        TEXT NOT NULL,         -- ISO YYYY-MM-DD
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS ids (
     company     TEXT NOT NULL,
     serial      TEXT NOT NULL,
     port        TEXT NOT NULL,         -- TN_A / TN_B / TN_C
-    site        TEXT NOT NULL,         -- номер площадки (1..99)
+    site        TEXT NOT NULL,         -- номер площадки (целое число)
     canonical   TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (producer, date, location, company, serial, port, site)

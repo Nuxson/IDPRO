@@ -19,6 +19,67 @@ async function api(path, opts) {
   return j;
 }
 
+/* ---------------- Справочники кодов (config/*.json) ---------------- */
+let CODES_CACHE = { producers: {}, companies: {} };
+
+async function refreshCodes() {
+  try {
+    const res = await api('/api/codes');
+    CODES_CACHE = res;
+    IdGen.setCodes(res);   // офлайн-режим браузера использует те же справочники
+  } catch (e) { /* сервер недоступен — оставляем последний кэш */ }
+  for (const kind of ['producers', 'companies']) {
+    const sel = $(`#genForm [name="${kind === 'producers' ? 'producer' : 'company'}"]`);
+    const entries = Object.entries(CODES_CACHE[kind] || {}).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
+    const cur = sel.value;
+    sel.innerHTML = '<option value="" disabled selected>— выберите из справочника —</option>' +
+      entries.map(([name, code]) => `<option value="${esc(name)}">${esc(name)} (${esc(code)})</option>`).join('');
+    if (entries.some(([n]) => n === cur)) sel.value = cur;
+  }
+}
+
+$('#codesForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  const box = $('#codesResult');
+  box.style.display = 'block';
+  box.textContent = '…';
+  try {
+    const names = f.names.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+    if (!names.length) throw new Error('Введите названия через запятую');
+    let codes;
+    if (f.mode === 'auto') {
+      // Программа сама генерирует код по первым буквам названия и сохраняет в JSON-справочник
+      const gen = await api('/api/codes/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codes: Object.fromEntries(names.map((n) => [n, ''])) }),
+      });
+      codes = gen.generated;
+      await api(`/api/codes/${f.kind}/add`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codes }),
+      });
+    } else {
+      // Пользователь сам задаёт коды: "Название1=КД1, Название2=КД2"
+      codes = {};
+      for (const part of f.names.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean)) {
+        const i = part.indexOf('=');
+        if (i < 0) throw new Error(`Не указан код для «${part}». Формат: Название=КД или режим «авто».`);
+        codes[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+      }
+      await api(`/api/codes/${f.kind}/add`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codes }),
+      });
+    }
+    box.innerHTML = `Сохранено в ${f.kind === 'producers' ? 'config/producers.json' : 'config/companies.json'}: ` +
+      Object.entries(codes).map(([n, c]) => `<b>${esc(n)}</b> → ${esc(c)}`).join(', ');
+    await refreshCodes();
+  } catch (err) {
+    box.innerHTML = `<span class="err">${esc(err.message)}</span>`;
+  }
+});
+
 /* ---------------- Создание ID ---------------- */
 $('#genForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -38,7 +99,7 @@ $('#genForm').addEventListener('submit', async (e) => {
       badge = `<span class="badge ${res.created ? 'b-ok' : 'b-err'}">${res.created ? 'создан новый' : 'уже существовал в базе'}</span>`;
       loadList();
     } catch (serverErr) {
-      // Офлайн-режим: считаем ID локально (тот же алгоритм, что на сервере)
+      // Офлайн-режим: считаем ID локально (тот же алгоритм + тот же справочник кодов)
       if (serverErr instanceof TypeError) {
         rec = await IdGen.makeId(fields);
         badge = '<span class="badge b-ok">рассчитан локально (офлайн, без записи в базу)</span>';
@@ -124,3 +185,4 @@ async function loadList() {
   } catch (e) { /* сервер недоступен — тихо пропускаем */ }
 }
 loadList();
+refreshCodes();

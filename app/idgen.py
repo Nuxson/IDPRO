@@ -1,36 +1,34 @@
 """
-Формат ID v4 — читаемый код вида «PP + DWC + CC + порт + площадка + хеш + CRC».
+Формат ID v6 — компактный читаемый код «PP + DWC + CC + порт + площадка + хеш + CRC».
 
-Пример короткого кода: ER2HF-MS-A-6
-  Ericsson, 2-я неделя августа, пятница (дата подставляется автоматически при
-  генерации — сегодня; при проверке восстанавливается из внутренней базы),
-  компания Масштаб-Связь (MS), порт TN_A (A), номер площадки 6 (код '7').
+Длина: 17 символов, группировка XXXX-XXXX-XXXX-XXX.
+Пример: RM4KF-VT-A2238HYEQ (условно: производитель с кодом RM из config/producers.json;
+        компания VT из config/companies.json; порт TN_A = A; площадка 42 -> '223A';
+        хеш 3 символа; контрольный код 2 символа)
 
 Разбор компактного кода (до контрольного кода):
-  [0:2]  PP   — код производителя (транслит; Ericsson -> ER)
-  [2:5]  DWC  — дата: D = номер недели в месяце (дни 1–7 = 1, 8–14 = 2 ...),
-               W = месяц (B=Январь ... Q=Декабрь),
-               C = день недели (A=Понедельник ... F=Пятница, G=Воскресенье).
-               Поле «дата» больше НЕ вводится пользователем — оно фиксируется
-               автоматически в момент генерации и хранится во внутренней базе.
-  [5:7]  CC   — читаемое сокращение компании по инициалам слов
-               (Масштаб-Связь -> MS; нечитаемые символы заменяются на Q)
-  [7]    S    — порт: TN_A -> A, TN_B -> B, TN_C -> C
-  [8:13] S    — номер площадки, base31, ровно 5 символов (0 .. 99999):
-               6 -> '22228', 42 -> '2223D'; читается как младшие цифры номера.
-
-Все символы ID принадлежат алфавиту base31 (без неоднозначных 0/O, 1/I/L, U, Y),
-поэтому офлайн-проверка отлавливает любую опечатку. Символы недель/месяцев/дней
-читаются по справочникам выше; точная дата, точный номер площадки и остальные
-поля восстанавливаются по внутренней базе (lookup по коду).
+  [0:2]  PP    — код производителя ИЗ СПРАВОЧНИКА config/producers.json
+                (программа не содержит названий брендов — только готовые коды)
+  [2:5]  DWC   — дата: D = номер недели в месяце (дни 1–7 = 1, 8–14 = 2 ...),
+                W = месяц (B=Январь ... Q=Декабрь),
+                C = день недели (A=Понедельник ... F=Пятница, G=Воскресенье).
+                Поле «дата» больше НЕ вводится пользователем — оно фиксируется
+                автоматически в момент генерации и хранится во внутренней базе.
+  [5:7]  CC    — сокращение компании ИЗ СПРАВОЧНИКА config/companies.json
+  [7]    S     — порт: TN_A -> A, TN_B -> B, TN_C -> C
+  [8:12] SSSS  — номер площадки, 4 символа compact-алфавита, диапазон 0..99999
+                (6 -> '2228', 42 -> '223A'); точно декодируется обратно в число.
 
 Далее:
-  хеш-часть   — SHA-256 от канонической строки полей v4 (base31, 6 симв.) —
-                кодирует место положения и серийный номер (уникальность);
-  контрольный — HMAC-SHA256 от тела ID (аналог CRC/IMEI), офлайн-проверка.
+  [12:15] HHH  — хеш-часть: SHA-256 от канонической строки полей v6
+                (3 символа compact-алфавита) — кодирует место положения и серийный номер;
+  [15:17] CC   — контрольный код HMAC-SHA256 от тела ID (аналог CRC/IMEI),
+                офлайн-проверка без доступа к базе.
 
-Полный вид с группировкой по 4 символа: ER2H-FMSA-22228-HASH-XXYZ
-(префикс 13 + хеш 6 + CRC 2 = 21 символ).
+Алфавиты: читаемые глазом сегменты (неделя/месяц/день/порт/производитель/компания)
+используют base31 (без 0/O, 1/I/L, U, Y); сжатые числовые сегменты (площадка, хеш,
+CRC) — compact-алфавит base34 (цифры+A-Z без 0/O, 1/I/L). Точная дата, точные поля и
+остальные данные восстанавливаются по внутренней базе (lookup по коду).
 """
 
 from __future__ import annotations
@@ -40,6 +38,8 @@ import hmac
 import re
 from datetime import date
 
+from .codes import CodesError, registry as default_registry
+
 # ---------- Справочники ----------
 MONTH_CODES = "BCDEFGHJKLMNPQ"        # месяц: B=Январь ... Q=Декабрь (алфавит без 0/O,1/I,L,U,Y)
 WEEKDAY_CODES = "ABCDEFG"             # день недели: A=Понедельник ... F=Пятница, G=Воскресенье
@@ -47,27 +47,48 @@ PORT_CODES = {"TN_A": "A", "TN_B": "B", "TN_C": "C"}   # порт -> буква
 
 ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"           # base31 (нет 0/O, 1/I/L, U, Y)
 BASE = len(ALPHABET)
+# Дополнительный алфавит для сжатых числовых сегментов (площадка/хеш/CRC):
+# полный base36 без неоднозначных 0/O и 1/I/L. Применяется ТОЛЬКО к сегментам,
+# которые никогда не декодируются в обратную сторону глазами (число -> код),
+# читаемые глазом сегменты (неделя/месяц/день/порт) остаются на base31.
+ALNUM36 = "23456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+BASE36 = len(ALNUM36)                                   # 34
 
 SEP = "-"
 BLOCK = 4
-HASH_LEN = 6
-CHECK_LEN = 2
-SITE_LEN = 5                                          # номер площадки: ровно 5 символов base31
-PREFIX_LEN = 2 + 3 + 2 + 1 + SITE_LEN                 # PP+DWC+CC+порт+площадка = 13
-BODY_LEN = PREFIX_LEN + HASH_LEN                      # 19
-TOTAL_LEN = BODY_LEN + CHECK_LEN                      # 21
+HASH_LEN = 3                                            # хеш: 3 символа compact-алфавита (~39304 варианта)
+CHECK_LEN = 2                                           # CRC: 2 символа base36
+SITE_LEN = 4                                            # площадка: 4 символа compact-алфавита (0..99999+)
+PREFIX_LEN = 2 + 3 + 2 + 1 + SITE_LEN                   # PP+DWC+CC+порт+площадка = 12
+BODY_LEN = PREFIX_LEN + HASH_LEN                        # 14
+TOTAL_LEN = BODY_LEN + CHECK_LEN                        # 17 символов
+GROUPS = (4, 4, 4, 3)                                   # группировка XXXX-XXXX-XXXX-XXX
+# Примечание: компактный формат сознательно короче прежних 20 символов; последний
+# блок на 3 символа — осознанный компромисс между длиной и коллизиями хеша.
+SITE_MAX = 99999                                        # верхняя граница номера площадки
+FORMAT_VERSION = "v6"
 
-# Читаемые коды производителей по умолчанию (расширяются без смены формата).
-PRODUCER_ALIASES = {
-    "ERICSSON": "ER", "NOKIA": "NO", "SIEMENS": "SI", "HUAWEI": "HW",
-    "SAMSUNG": "SA", "ROBOTECH": "RQ",
-}
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
-# Читаемые сокращения компаний по инициалам слов: MASHTAB-SVYAZ -> MS.
-COMPANY_ALIASES = {
-    "МАСШТАБ-СВЯЗЬ": "MS",
-    "MASHTAB-SVYAZ": "MS", "MASHATAB-SVYAZ": "MS",
-}
+
+def _norm(value: str) -> str:
+    """Нормализация строки: trim, верхний регистр, схлопывание пробелов."""
+    return " ".join((value or "").strip().upper().split())
+
+
+def producer_code(name: str, registry_obj=None) -> str:
+    """Код производителя из справочника config/producers.json.
+
+    Программа не вычисляет коды из названий брендов — соответствия задаёт
+    пользователь в JSON-конфиге. Если имени нет в справочнике — CodesError
+    с подсказкой, какую запись добавить.
+    """
+    return (registry_obj or default_registry).producer_code(name)
+
+
+def company_abbr(name: str, registry_obj=None) -> str:
+    """Сокращение компании из справочника config/companies.json."""
+    return (registry_obj or default_registry).company_code(name)
 
 
 _TMAP = {
@@ -83,65 +104,27 @@ def _translit(text: str) -> str:
     return "".join(_TMAP.get(ch, ch) for ch in text)
 
 
-def _readable(text: str) -> str:
-    """Транслитерирует кириллицу в латиницу и оставляет только символы алфавита base31.
+def suggest_code(name: str) -> str:
+    """Генерирует рекомендуемый 2-символьный код из названия (для заполнения справочника).
 
-    Эрикссон -> ERICCCOH -> 'ER'; Nokia -> NOKIA -> 'NK' (O вырезается как неоднозначная).
-    Так код производителя всегда читается и при этом проходит офлайн-валидацию ID.
-    """
-    t = _translit(text.upper())
-    return "".join(ch for ch in t if ch in ALPHABET)
-
-
-_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
-
-
-def _norm(value: str) -> str:
-    """Нормализация строки: trim, верхний регистр, схлопывание пробелов.
-
-    Транслит кириллицы в латиницу НЕ применяется к канонической строке —
-    иначе «Москва» и «Moscow» дали бы один ID при разных исходных данных.
-    Для читаемых кодов производителя/компании используется _readable().
-    """
-    return " ".join((value or "").strip().upper().split())
-
-
-def producer_code(name: str) -> str:
-    """Читаемый код производителя: первые 2 буквы транслита (Ericsson -> ER, Эрикссон -> ER).
-
-    Приоритет: словарь PRODUCER_ALIASES → первые 2 допустимые буквы транслита →
-    детерминированный 2-символьный код из base31 (стабилен для одного имени).
+    Инициалы слов транслитированного названия («Ромашка-Завод» -> RZ); если
+    инициалов меньше двух или они содержат неоднозначные символы (0/O, 1/I/L),
+    добираются/заменяются первыми допустимыми буквами, крайний случай —
+    детерминированный код из SHA-256 имени. Используется только как подсказка:
+    итоговый код всегда фиксируется пользователем в JSON-справочнике.
     """
     n = _norm(name)
-    if n in PRODUCER_ALIASES:
-        return PRODUCER_ALIASES[n]
-    letters = _readable(n)
-    if len(letters) >= 2:
-        return letters[:2]
-    digest = hashlib.sha256(("v3p:" + n).encode()).digest()
-    return to_base31(int.from_bytes(digest[:4], "big"), 2)
-
-
-def company_abbr(name: str) -> str:
-    """Читаемое сокращение компании по инициалам слов (Масштаб-Связь -> MS).
-
-    Используется в сегменте CC внутри ID; нечитаемые в алфавите буквы
-    (I, O, U, Y) заменяются на Q, одиночное слово дополняется до 2 символов.
-    """
-    n = _norm(name)
-    if n in COMPANY_ALIASES:
-        return COMPANY_ALIASES[n]
-    # Транслит всей строки, инициалы слов (первые буквы), затем только символы base31.
-    # Масштаб-Связь -> MASHTAB-SVYAZ -> MS; ИнвестГрупп -> InvestGroup -> 'V' + добор 'Q'.
-    # Инициалы слов транслитированного названия: МАСШТАБ-СВЯЗЬ -> MASHTAB-SVYAZ -> MS.
-    tr = _translit(n)
+    tr = _translit(n.upper())
     words = [w for w in re.split(r"[\s\-]+", tr) if w]
     initials = "".join(w[0] for w in words)
-    readable = "".join(ch for ch in initials if ch in ALPHABET)
-    if len(readable) < 2:
-        extra = [ch for ch in _readable(n) if ch not in readable]
-        readable += "".join(extra)
-    return readable[:2].ljust(2, "Q")
+    letters = "".join(ch for ch in initials if ch in ALPHABET)
+    if len(letters) < 2:
+        extra = [ch for ch in "".join(c for c in tr if c in ALPHABET) if ch not in letters]
+        letters += "".join(extra)
+    if len(letters) >= 2:
+        return letters[:2]
+    digest = hashlib.sha256(("v6suggest:" + n).encode()).digest()
+    return to_base31(int.from_bytes(digest[:4], "big"), 2)
 
 
 def port_code(port: str) -> str:
@@ -156,26 +139,27 @@ def port_code(port: str) -> str:
 
 
 def site_code(site: str) -> str:
-    """Код номера площадки: ровно 5 символов base31, диапазон 0..99999.
+    """Код номера площадки: 4 символа compact-алфавита, диапазон 0..99999.
 
-    6 -> '22228', 42 -> '2223D', 0 -> '22222'. Младшие символы читаются как
-    номер; точное значение всегда восстанавливается из внутренней базы.
+    Площадка не ограничена 99 и не привязана жёстко к цифрам: любое число
+    0..99999 кодируется четырьмя символами без неоднозначных знаков и точно
+    декодируется обратно (6 -> '2228', 42 -> '223A', 0 -> '2222').
     """
     s = _norm(site).replace(" ", "")
     s = re.sub(r"^(НОМЕР|NOMER|NO|#)", "", s) or s
     if not re.fullmatch(r"\d+", s):
-        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается число 0..99999)")
+        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается целое число)")
     num = int(s)
-    if not 0 <= num <= 99999:
-        raise ValueError(f"Номер площадки вне диапазона 0..99999: {site!r}")
-    return to_base31(num, SITE_LEN)
+    if not 0 <= num <= SITE_MAX:
+        raise ValueError(f"Номер площадки вне диапазона 0..{SITE_MAX}: {site!r}")
+    return to_base36(num, SITE_LEN)
 
 
 def decode_site(code: str) -> int:
-    """Обратный разбор 5-символьного кода площадки ('22228' -> 6, '2223D' -> 42)."""
+    """Обратный разбор кода площадки ('2228' -> 6, '223A' -> 42)."""
     n = 0
     for ch in code.upper():
-        n = n * BASE + ALPHABET.index(ch)
+        n = n * BASE36 + ALNUM36.index(ch)
     return n
 
 
@@ -285,10 +269,19 @@ def norm_date(value: str) -> str:
 
 
 def to_base31(number: int, length: int) -> str:
+    return _to_base(number, length, ALPHABET, BASE)
+
+
+def to_base36(number: int, length: int) -> str:
+    """Кодирование для сжатых сегментов (площадка/хеш/CRC): алфавит 34 символа."""
+    return _to_base(number, length, ALNUM36, BASE36)
+
+
+def _to_base(number: int, length: int, alphabet: str, base: int) -> str:
     out = []
     for _ in range(length):
-        number, rem = divmod(number, BASE)
-        out.append(ALPHABET[rem])
+        number, rem = divmod(number, base)
+        out.append(alphabet[rem])
     return "".join(reversed(out))
 
 
@@ -298,20 +291,21 @@ def checksum(body: str, secret: str | None = None) -> str:
         digest = hmac.new(secret.encode(), msg, hashlib.sha256).digest()
     else:
         digest = hashlib.sha256(msg).digest()
-    return to_base31(int.from_bytes(digest[:4], "big"), CHECK_LEN)
+    return to_base36(int.from_bytes(digest[:4], "big"), CHECK_LEN)
 
 
 def canonical_string(producer: str, iso_date: str, location: str, company: str,
                      serial: str, port: str, site: str) -> str:
-    """Каноническая строка формата v4 (версия зафиксирована в префиксе 'v4')."""
-    return "|".join(["v4", producer, iso_date, location, company, serial, port, site])
+    """Каноническая строка формата v6 (версия зафиксирована в префиксе 'v6')."""
+    return "|".join([FORMAT_VERSION, producer, iso_date, location, company, serial, port, site])
 
 
-def short_code(producer: str, iso_date: str, company: str, port: str, site: str) -> str:
-    """Короткий читаемый код вида ER2HF-MS-A-6 (без хеша и CRC) — для площадок/журналов."""
+def short_code(producer: str, iso_date: str, company: str, port: str, site: str,
+               registry_obj=None) -> str:
+    """Короткий читаемый код вида RM4KF-VT-A-6 (без хеша и CRC) — для площадок/журналов."""
     return SEP.join([
-        producer_code(producer) + date_segment(iso_date),
-        company_abbr(company),
+        producer_code(producer, registry_obj) + date_segment(iso_date),
+        company_abbr(company, registry_obj),
         port_code(port),
         str(decode_site(site_code(site))),
     ])
@@ -319,13 +313,16 @@ def short_code(producer: str, iso_date: str, company: str, port: str, site: str)
 
 def make_id(producer: str, location: str, company: str, serial: str,
             port: str, site: str, secret: str | None = None,
-            dt: str | None = None) -> dict:
-    """Генерирует читаемый ID формата v4. Детерминирован: те же данные → тот же ID.
+            dt: str | None = None, registry_obj=None) -> dict:
+    """Генерирует читаемый ID формата v6. Детерминирован: те же данные → тот же ID.
 
     Дата НЕ запрашивается у пользователя: фиксируется автоматически (сегодня)
     в момент генерации и сохраняется во внутренней базе; при проверке кода
     точная дата восстанавливается из базы. Параметр `dt` — служебный (тесты).
+    Коды производителя и компании берутся из JSON-справочников (app/codes.py);
+    при отсутствии имени в справочнике — CodesError с подсказкой.
     """
+    reg = registry_obj or default_registry
     producer, iso_location, company, serial, site = (
         _norm(x) for x in (producer, location, company, serial, site))
     port_n = _norm(port)
@@ -336,19 +333,26 @@ def make_id(producer: str, location: str, company: str, serial: str,
         raise ValueError("Заполните поля: " + ", ".join(missing))
     iso_date = norm_date(dt) if dt else date.today().isoformat()
 
-    canon = canonical_string(producer, iso_date, iso_location, company, serial, port_n, site)
-    hash_part = to_base31(int(hashlib.sha256(canon.encode()).hexdigest()[:16], 16), HASH_LEN)
+    # Коды из справочников — до вычисления хеша, чтобы ошибка была понятной.
+    pcode = reg.producer_code(producer)
+    ccode = reg.company_code(company)
 
-    prefix = (producer_code(producer) + date_segment(iso_date) + company_abbr(company)
+    canon = canonical_string(producer, iso_date, iso_location, company, serial, port_n, site)
+    hash_part = to_base36(int(hashlib.sha256(canon.encode()).hexdigest()[:12], 16), HASH_LEN)
+
+    prefix = (pcode + date_segment(iso_date) + ccode
               + port_code(port_n) + site_code(site))
     body = prefix + hash_part
     full = body + checksum(body, secret)
-    blocks = [full[i:i + BLOCK] for i in range(0, len(full), BLOCK)]
+    blocks, pos = [], 0
+    for size in GROUPS:
+        blocks.append(full[pos:pos + size])
+        pos += size
 
     return {
         "id": SEP.join(blocks),
         "compact": full,
-        "short": short_code(producer, iso_date, company, port_n, site),
+        "short": short_code(producer, iso_date, company, port_n, site, reg),
         "canonical": canon,
         "date_segment": body[2:5],
         "decoded_date": decode_date_segment(body[2:5], ref_iso=iso_date),
@@ -367,13 +371,13 @@ def verify_checksum(raw_id: str, secret: str | None = None) -> bool:
     compact = normalize_id(raw_id)
     if len(compact) != TOTAL_LEN:
         return False
-    if any(ch not in ALPHABET for ch in compact):
+    if any(ch not in ALNUM36 for ch in compact):
         return False
-    if compact[2] not in ALPHABET[:5]:                 # неделя в месяце 1..5
+    if compact[2] not in ALPHABET[:5]:                 # неделя в месяце 1..5 (base31)
         return False
     if compact[3] not in MONTH_CODES or compact[4] not in WEEKDAY_CODES:
         return False
-    if compact[7] not in "ABC":                        # порт TN_A/TN_B/TN_C
+    if compact[7] not in PORT_CODES.values():          # порт TN_A/TN_B/TN_C
         return False
     body, check = compact[:BODY_LEN], compact[BODY_LEN:]
     return checksum(body, secret) == check
@@ -396,7 +400,7 @@ def extract_parts(raw_id: str) -> dict:
     except ValueError:
         parts["date_decoded"] = None
     try:
-        parts["site_number"] = decode_site(c[8:PREFIX_LEN])
+        parts["site_number"] = decode_site(c[8:PREFIX_LEN]) if len(c) >= PREFIX_LEN else None
     except ValueError:
         parts["site_number"] = None
     parts["port_name"] = {v: k for k, v in PORT_CODES.items()}.get(c[7])

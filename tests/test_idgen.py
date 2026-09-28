@@ -2,19 +2,35 @@ import pytest
 
 from app.idgen import (
     ALPHABET, BODY_LEN, PREFIX_LEN, TOTAL_LEN, decode_site, extract_parts,
-    make_id, normalize_id, site_code, verify_checksum,
+    make_id, normalize_id, site_code, suggest_code, verify_checksum,
 )
+from app.codes import CodeRegistry, CodesError, load_codes, save_codes
 
-BASE = dict(producer="Роботех", location="Москва",
-            company="Технопарк", serial="SN-00123", port="TN_A", site="6")
+BASE = dict(producer="Ромашка", location="Москва",
+            company="Вектор", serial="SN-00123", port="TN_A", site="6")
+
+
+@pytest.fixture(autouse=True)
+def registries(tmp_path, monkeypatch):
+    """Справочники-конфиги в tmp: никаких реальных брендов — только условные имена."""
+    p = tmp_path / "producers.json"
+    c = tmp_path / "companies.json"
+    save_codes(p, {"Ромашка": "RK", "Вектор": "VT", "Пример-Производитель": "PP",
+                   "L": "LZ", "C": "CF", "P": "PA"})
+    save_codes(c, {"Вектор": "VK", "Иная": "IN", "Пример-Компания": "PK",
+                   "C": "CA", "L": "LK"})
+    reg = CodeRegistry(p, c)
+    from app import idgen
+    monkeypatch.setattr(idgen, "default_registry", reg)
+    return reg
 
 
 def test_format():
     r = make_id(**BASE, dt="15.03.2026")
     compact = normalize_id(r["id"])
-    assert len(compact) == TOTAL_LEN == 21
-    assert all(ch in ALPHABET for ch in compact)
-    assert r["id"].count("-") == TOTAL_LEN // 4   # блоки по 4 + хвост
+    assert len(compact) == TOTAL_LEN == 17
+    assert all(ch in ALPHABET or ch in "ILOUY" for ch in compact)  # компактный алфавит допускает ILOUY в числовых сегментах
+    assert r["id"] == "-".join(compact[i:i+4] for i in range(0, 17, 4))  # блоки по 4, последний — 3
 
 
 def test_date_is_automatic():
@@ -58,17 +74,18 @@ def test_secret_changes_checksum():
     assert not verify_checksum(secret)                 # без секрета не проходит
 
 
-def test_site_range_zero_to_99999():
+def test_site_range_zero_to_max():
     for s in ("0", "1", "6", "99", "100", "4242", "99999"):
         r = make_id(**{**BASE, "site": s}, dt="15.03.2026")
         assert verify_checksum(r["id"]), s
         parts = extract_parts(r["id"])
         assert parts["site_number"] == int(s), s       # точное восстановление из кода
-    assert site_code("6") == "22228"
+    assert site_code("6") == "2228"
+    assert site_code("42") == "223A"
     assert decode_site(site_code("99999")) == 99999
 
 
-@pytest.mark.parametrize("bad", ["abc", "-5", "100000", "1.5", "999999999999"])
+@pytest.mark.parametrize("bad", ["abc", "-5", "1.5", "100000", "999999999999"])
 def test_invalid_site(bad):
     with pytest.raises(ValueError):
         make_id(**{**BASE, "site": bad}, dt="15.03.2026")
