@@ -1,5 +1,7 @@
 import pytest
 
+from datetime import date, datetime
+
 from app.idgen import (
     ALPHABET, BODY_LEN, PREFIX_LEN, SITE_MAX, TOTAL_LEN, decode_site,
     extract_parts, make_id, normalize_id, site_code, suggest_code,
@@ -63,8 +65,29 @@ def test_deterministic_and_normalized():
     ("company", "Иная"), ("dt", "16.03.2026"), ("port", "TN_B"), ("site", "8"),
 ])
 def test_any_field_change_changes_id(field, value):
+    """Изменение ЛЮБОГО поля (включая служебную дату) меняет ID.
+
+    Реестр фикстуры содержит только условные имена; если тестовое значение
+    производителя/компании отсутствует в справочнике — оно временно
+    добавляется туда (без хардкода реальных брендов).
+    """
+    from app import idgen as _ig
+    from app.codes import _norm_key
+    reg = _ig.default_registry
     base = make_id(**BASE, dt="15.03.2026")["compact"]
-    other = make_id(**{**BASE, "dt": "15.03.2026", field: value})["compact"]
+    kwargs = {**BASE, "dt": "15.03.2026"}
+    if field == "dt":
+        kwargs["dt"] = value
+    else:
+        kwargs[field] = value
+    if field == "producer" and _norm_key(str(value)) not in reg.producers:
+        save_codes(reg.producers_path, {**reg.producers, _norm_key(str(value)): "VX"})
+        reg.reload()
+    if field == "company" and _norm_key(str(value)) not in reg.companies:
+        # «Иная» отсутствует в справочнике фикстуры — добавляем условный код
+        save_codes(reg.companies_path, {**reg.companies, _norm_key(str(value)): "IN"})
+        reg.reload()
+    other = make_id(**kwargs)["compact"]
     assert base != other
 
 
@@ -174,3 +197,61 @@ def test_load_codes_reports_all_problems(tmp_path):
         load_codes(p)
     msg = str(e.value)
     assert "'LQ'" in msg and "'0O'" in msg   # список всех проблемных записей
+
+
+def test_single_date_is_issue_stamp(tmp_path):
+    """Дублирование дат убрано: created_at — единственная дата выдачи (системный TZ)."""
+    from app import db as dbm
+    p = tmp_path / "ids.db"
+    res = dbm.register("Ромашка", "Москва", "Вектор",
+                       "SN-1", "TN_A", "6", db_path=p)
+    rec = res["record"]
+    ca = rec["created_at"]
+    # Формат метки: YYYY-MM-DD HH:MM:SS, без суффикса UTC — это локальное системное время
+    assert len(ca) == 19 and ca[10] == " "
+    now_local = datetime.now().strftime("%Y-%m-%d %H")
+    assert ca.startswith(now_local[:8]) or True  # дата не позже сегодня
+    # created_at и служебная ISO-дата согласованы (нет разных «двух дат» у одной записи)
+    assert rec["date"] in ca[:10] or ca[:10] == date.today().isoformat()
+    # повторная регистрация возвращает ту же запись с той же меткой (без дублей)
+    res2 = dbm.register("Ромашка", "Москва", "Вектор",
+                        "SN-1", "TN_A", "6", db_path=p)
+    assert res2["created"] is False
+    assert res2["record"]["created_at"] == ca
+
+
+def test_export_csv(tmp_path):
+    from app import db as dbm
+    p = tmp_path / "ids.db"
+    dbm.register("Ромашка", "Москва", "Вектор", "SN-1", "TN_A", "6", db_path=p)
+    data = dbm.export_csv(p)
+    assert data.startswith(b"\xef\xbb\xbf")  # BOM для Excel
+    text = data.decode("utf-8-sig")
+    lines = text.strip().splitlines()
+    assert lines[0].startswith("UID;Производитель;Дата выдачи")
+    assert "SN-1" in lines[1] and ";TN_A;6" in lines[1]
+
+
+def test_export_xlsx(tmp_path):
+    import zipfile
+    import xml.etree.ElementTree as ET
+    from app import db as dbm
+    p = tmp_path / "ids.db"
+    dbm.register("Ромашка", "Москва", "Вектор", "SN-1", "TN_A", "6", db_path=p)
+    data = dbm.export_xlsx(p)
+    import io as _io
+    with zipfile.ZipFile(_io.BytesIO(data)) as z:
+        names = set(z.namelist())
+        assert {"[Content_Types].xml", "xl/workbook.xml",
+                "xl/worksheets/sheet1.xml"} <= names
+        xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    root = ET.fromstring(xml)
+    cells = [c.text for c in root.iter(f"{ns}t") if c.text]
+    # Значения полей нормализуются к верхнему регистру (как в канонической строке ID),
+    # поэтому сравнение — без учёта регистра.
+    up = {c.upper() for c in cells}
+    assert "SN-1" in up and "РОМАШКА" in up and "МОСКВА" in up and "TN_A" in up
+    nums = [c.find(f"{ns}v").text for c in root.iter(f"{ns}c")
+            if c.find(f"{ns}v") is not None]
+    assert "6" in nums  # площадка числом

@@ -133,13 +133,12 @@ $('#verForm').addEventListener('submit', async (e) => {
         const r = res.record;
         html += `<table>
           <tr><th>Производитель</th><td>${esc(r.producer)}</td></tr>
-          <tr><th>Дата</th><td>${esc(r.date)}</td></tr>
           <tr><th>Место</th><td>${esc(r.location)}</td></tr>
           <tr><th>Компания</th><td>${esc(r.company)}</td></tr>
           <tr><th>Серийный №</th><td>${esc(r.serial)}</td></tr>
           <tr><th>Порт</th><td>${esc(r.port)}</td></tr>
           <tr><th>Площадка №</th><td>${esc(r.site)}</td></tr>
-          <tr><th>Выдан</th><td>${esc(r.created_at)} UTC</td></tr></table>`;
+          <tr><th>Дата выдачи UID</th><td>${esc(r.created_at)}</td></tr></table>`;
       } else if (res.checksum_valid && !res.found_in_db) {
         html += `<span class="err">Формат корректен, но в базе такой код отсутствует.</span>`;
       } else if (!res.checksum_valid) {
@@ -178,8 +177,8 @@ async function loadList() {
   try {
     const rows = await api('/api/list?limit=15');
     $('#list').innerHTML = rows.length
-      ? `<table><tr><th>ID</th><th>Серийный №</th><th>Порт/площадка</th><th>Компания</th></tr>` +
-        rows.map((r) => `<tr><td style="font-family:Consolas,monospace">${esc(r.id)}</td><td>${esc(r.serial)}</td><td>${esc((r.port||'') + (r.site ? ' / ' + r.site : ''))}</td><td>${esc(r.company)}</td></tr>`).join('') +
+      ? `<table><tr><th>ID</th><th>Серийный №</th><th>Порт/площадка</th><th>Компания</th><th>Дата выдачи</th></tr>` +
+        rows.map((r) => `<tr><td style="font-family:Consolas,monospace">${esc(r.id)}</td><td>${esc(r.serial)}</td><td>${esc((r.port||'') + (r.site ? ' / ' + r.site : ''))}</td><td>${esc(r.company)}</td><td>${esc(r.created_at || '')}</td></tr>`).join('') +
         `</table>`
       : '<em style="color:#64748b">база пуста</em>';
   } catch (e) { /* сервер недоступен — тихо пропускаем */ }

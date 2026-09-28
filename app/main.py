@@ -103,6 +103,20 @@ def list_records(limit: int = Query(100, ge=1, le=1000)):
     return db.list_ids(limit)
 
 
+@app.get("/api/export")
+def export(fmt: str = Query("csv", pattern="^(csv|xlsx)$")):
+    """Экспорт всей базы выданных UID в CSV или Excel (.xlsx)."""
+    from fastapi.responses import Response
+    if fmt == "xlsx":
+        data, media, fname = (db.export_xlsx(),
+                              "application/vnd.openxmlformats-officedocument"
+                              ".spreadsheetml.sheet", "ids.xlsx")
+    else:
+        data, media, fname = db.export_csv(), "text/csv; charset=utf-8", "ids.csv"
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 # ---------- Справочники кодов (JSON-конфиги) ----------
 
 def _validate_codes(codes: dict[str, str], kind: str = "producers") -> dict[str, str]:
