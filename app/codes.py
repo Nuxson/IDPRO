@@ -26,7 +26,18 @@ from pathlib import Path
 # Алфавит читаемых сегментов ID (base31): без 0/O, 1/I/L, U, Y.
 ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+def _config_dir() -> Path:
+    """Каталог справочников. Приоритет: IDGEN_CONFIG_DIR > рядом с exe/проектом,
+    чтобы пользователь мог редактировать JSON-файлы после сборки."""
+    env_dir = __import__("os").environ.get("IDGEN_CONFIG_DIR")
+    if env_dir:
+        return Path(env_dir)
+    if getattr(__import__("sys"), "frozen", False):  # PyInstaller
+        return Path(__import__("sys").executable).resolve().parent / "config"
+    return Path(__file__).resolve().parent.parent / "config"
+
+
+CONFIG_DIR = _config_dir()
 PRODUCERS_FILE = CONFIG_DIR / "producers.json"
 COMPANIES_FILE = CONFIG_DIR / "companies.json"
 PORTS_FILE = CONFIG_DIR / "ports.json"
@@ -142,8 +153,9 @@ def ensure_configs(force: bool = False) -> dict[str, Path]:
 class CodeRegistry:
     """Объединённый доступ к справочникам производителей и компаний.
 
-    Кэширует содержимое JSON-файлов; вызов reload() перечитывает их с диска
-    (например, после правки пользователем).
+    Кэширует содержимое JSON-файлов; кэш автоматически сбрасывается, когда
+    файл справочника меняется на диске (правка вручную или через API), —
+    перезапуск приложения не требуется. Вызов reload() форсирует перечитывание.
     """
 
     def __init__(self, producers_path: Path | str = PRODUCERS_FILE,
@@ -155,28 +167,45 @@ class CodeRegistry:
         self._producers: dict[str, str] | None = None
         self._companies: dict[str, str] | None = None
         self._ports: dict[str, str] | None = None
+        self._stamps: dict[Path, tuple] = {}
+
+    @staticmethod
+    def _stamp(path: Path) -> tuple:
+        try:
+            st = path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            return ("missing",)
+
+    def _fresh(self, path: Path) -> bool:
+        """True, если файл с момента последнего чтения не менялся."""
+        return self._stamps.get(path) == self._stamp(path)
 
     def reload(self) -> None:
         self._producers = None
         self._companies = None
         self._ports = None
+        self._stamps.clear()
 
     @property
     def producers(self) -> dict[str, str]:
-        if self._producers is None:
+        if self._producers is None or not self._fresh(self.producers_path):
             self._producers = load_codes(self.producers_path)
+            self._stamps[self.producers_path] = self._stamp(self.producers_path)
         return self._producers
 
     @property
     def companies(self) -> dict[str, str]:
-        if self._companies is None:
+        if self._companies is None or not self._fresh(self.companies_path):
             self._companies = load_codes(self.companies_path)
+            self._stamps[self.companies_path] = self._stamp(self.companies_path)
         return self._companies
 
     @property
     def ports(self) -> dict[str, str]:
-        if self._ports is None:
+        if self._ports is None or not self._fresh(self.ports_path):
             self._ports = load_codes(self.ports_path, code_len=1)
+            self._stamps[self.ports_path] = self._stamp(self.ports_path)
         return self._ports
 
     def producer_code(self, name: str) -> str:

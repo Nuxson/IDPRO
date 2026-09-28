@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -11,7 +12,18 @@ from pathlib import Path
 
 from .idgen import make_id, normalize_id
 
-DB_PATH = Path(__file__).resolve().parent.parent / "ids.db"
+def _data_dir() -> Path:
+    """Каталог данных. Приоритет: IDGEN_DB > IDGEN_DATA_DIR > рядом с exe/проектом."""
+    env_db = os.environ.get("IDGEN_DB")
+    if env_db:
+        return Path(env_db).resolve().parent
+    if getattr(__import__("sys"), "frozen", False):  # PyInstaller
+        return Path(__import__("sys").executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+_env_db = os.environ.get("IDGEN_DB")
+DB_PATH = Path(_env_db).resolve() if _env_db else _data_dir() / "ids.db"
 
 # Единственная дата в системе — дата выдачи UID (created_at), часовой пояс системный.
 DATE_COL = "created_at"

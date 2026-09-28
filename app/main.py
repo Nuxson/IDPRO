@@ -17,7 +17,15 @@ from .idgen import (extract_parts, make_id, suggest_code, suggest_port,
 
 app = FastAPI(title="Unique ID Generator", version="1.0")
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+def _static_dir() -> Path:
+    """Каталог веб-интерфейса: в исходниках — app/static; в собранном exe —
+    извлекаемый бандл PyInstaller (_MEIPASS)."""
+    if getattr(__import__("sys"), "frozen", False):  # PyInstaller
+        return Path(__import__("sys")._MEIPASS) / "app" / "static"
+    return Path(__file__).resolve().parent / "static"
+
+
+STATIC_DIR = _static_dir()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")  # js/idgen.js, js/app.js
 SECRET = os.environ.get("IDGEN_SECRET") or None  # необязательный секрет для контрольного кода
 
