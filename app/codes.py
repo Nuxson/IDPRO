@@ -47,7 +47,17 @@ def load_codes(path: Path | str, code_len: int = 2) -> dict[str, str]:
     """Читает JSON-справочник и возвращает словарь {НОРМАЛИЗОВАННОЕ_ИМЯ: КОД}.
 
     code_len=2 — производители/компании; code_len=1 — справочник портов.
+    Для портов ключ нормализуется тем же правилом, что и ввод пользователя в
+    idgen.port_code (разделители _, -, : и пробелы не значимы), поэтому запись
+    "TN-A"/"tn a" читается как "TN_A".
     """
+    port_mode = code_len == 1
+
+    def key_of(value: str) -> str:
+        if not port_mode:
+            return _norm_key(value)
+        return re.sub(r"[^A-Z0-9]+", "_", _norm_key(value)).strip("_")
+
     p = Path(path)
     if not p.exists():
         raise CodesError(
@@ -64,7 +74,7 @@ def load_codes(path: Path | str, code_len: int = 2) -> dict[str, str]:
     out: dict[str, str] = {}
     problems: list[str] = []
     for name, code in raw.items():
-        key = _norm_key(str(name))
+        key = key_of(str(name))
         if not key:
             continue
         code = str(code).strip().upper()

@@ -88,37 +88,32 @@ def to_base36(number: int, length: int) -> str:
     return _to_base(number, length, ALNUM36, BASE36)
 
 
-def _site_excluded() -> frozenset[int]:
-    """Множество запрещённых номеров площадок.
+#: Ёмкость кода площадки и формальная верхняя граница (без перебора!).
+SITE_CAPACITY = BASE36 ** SITE_LEN           # 1 336 336
+SITE_MAX = SITE_CAPACITY - 1                 # 1 336 335
 
-    Площадка n запрещена, если её compact-код c[0..3] имеет вид
-    c[0]∈ALPHABET[:5] (неделя), c[1]∈MONTH_CODES, c[2]∈WEEKDAY_CODES —
-    тогда фрагмент кода совпадает с сегментом даты DWC. Вычисляется
-    конструктором (перебор 34^4 ≈ 1.34 млн) ровно один раз при импорте,
-    после чего используется только кэш.
+
+def is_site_ambiguous(site_num: int) -> bool:
+    """True, если код площадки двусмысленен (совпадает с шаблоном сегмента даты DWC).
+
+    Проверка O(1), без перебора всего диапазона: старшие три символа кода
+    должны одновременно попадать в алфавиты недели/месяца/дня недели.
+    Такие номера зарезервированы и не выдаются, чтобы 19-символьный код
+    читался однозначно при любом сдвиге группировки.
     """
-    bad = set()
-    for n in range(BASE36 ** SITE_LEN):
-        code = to_base36(n, SITE_LEN)
-        if code[0] in ALPHABET[:5] and code[1] in MONTH_CODES and code[2] in WEEKDAY_CODES:
-            bad.add(n)
-    return frozenset(bad)
-
-
-#: Зарезервированные номера площадок (кэш, см. _site_excluded)
-SITE_EXCLUDED: frozenset[int] = _site_excluded()
+    if not 0 <= site_num < SITE_CAPACITY:
+        raise ValueError(f"Номер площадки вне ёмкости кода 0..{SITE_MAX}: {site_num!r}")
+    a, b, c = (site_num // BASE36 ** 3,
+               (site_num // BASE36 ** 2) % BASE36,
+               (site_num // BASE36) % BASE36)
+    return (a < 5                                   # ALPHABET[:5] = '23456' (недели 1..5)
+            and ALNUM36[b] in MONTH_CODES           # месяц B..Q
+            and ALNUM36[c] in WEEKDAY_CODES)        # день недели A..G
 
 
 def site_excluded() -> frozenset[int]:
-    """Публичный доступ к множеству зарезервированных номеров площадок."""
-    return SITE_EXCLUDED
-
-
-#: Максимальный номер площадки = формальная ёмкость кода минус зарезервованные
-#: «двусмысленные» значения (обычно это 1 336 335 или чуть меньше).
-SITE_MAX = BASE36 ** SITE_LEN - 1
-while SITE_MAX in SITE_EXCLUDED:
-    SITE_MAX -= 1
+    """Зарезервированные номера площадок (вычисляются лениво, ~17 тыс. значений)."""
+    return frozenset(n for n in range(SITE_CAPACITY) if is_site_ambiguous(n))
 
 FORMAT_VERSION = "v6"
 
@@ -228,10 +223,12 @@ def site_code(site: str) -> str:
     if not re.fullmatch(r"\d+", s):
         raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается целое число)")
     num = int(s)
-    if not 0 <= num <= SITE_MAX or num in site_excluded():
+    if not 0 <= num <= SITE_MAX:
+        raise ValueError(f"Номер площадки вне допустимого диапазона 0..{SITE_MAX}: {site!r}")
+    if is_site_ambiguous(num):
         raise ValueError(
-            f"Номер площадки вне допустимого диапазона 0..{SITE_MAX} "
-            f"(зарезервированные значения {sorted(SITE_EXCLUDED)} недоступны): {site!r}")
+            f"Номер площадки {num} зарезервирован (его код совпадает с шаблоном "
+            f"сегмента даты — выберите соседнее значение): {site!r}")
     return to_base36(num, SITE_LEN)
 
 
@@ -369,7 +366,7 @@ def short_code(producer: str, iso_date: str, company: str, port: str, site: str,
     return SEP.join([
         producer_code(producer, registry_obj) + date_segment(iso_date),
         company_abbr(company, registry_obj),
-        port_code(port),
+        port_code(port, registry_obj),
         str(decode_site(site_code(site))),
     ])
 
@@ -401,10 +398,13 @@ def make_id(producer: str, location: str, company: str, serial: str,
     ccode = reg.company_code(company)
 
     canon = canonical_string(producer, iso_date, iso_location, company, serial, port_n, site)
-    hash_part = to_base36(int(hashlib.sha256(canon.encode()).hexdigest()[:12], 16), HASH_LEN)
+    # ВАЖНО: берём 8 байт дайджеста напрямую (int.from_bytes), а НЕ hex[:12] —
+    # hex-срезы не совпадают с побайтовым представлением (расхождение Python/JS).
+    hash_part = to_base36(int.from_bytes(
+        hashlib.sha256(canon.encode()).digest()[:8], "big"), HASH_LEN)
 
     prefix = (pcode + date_segment(iso_date) + ccode
-              + port_code(port_n) + site_code(site))
+              + port_code(port_n, reg) + site_code(site))
     body = prefix + hash_part
     full = body + checksum(body, secret)
     blocks, pos = [], 0
