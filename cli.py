@@ -1,8 +1,9 @@
 """CLI для генерации и проверки ID без веб-интерфейса.
 
 Примеры:
-    python cli.py generate --producer "Роботех" --date 15.03.2026 \
-        --location "Москва" --company "Технопарк" --serial SN-00123
+    python cli.py generate --producer "Эрикссон" --date 07:08:2026 \
+        --location "Москва" --company "Масштаб-Связь" --serial SN-00123 \
+        --port TN_A --site 6
     python cli.py verify RQTE-MQ9Q-HSEW-FG
 """
 
@@ -17,16 +18,20 @@ from app.idgen import extract_parts, make_id, verify_checksum
 
 def cmd_generate(args):
     db.init_db()
-    res = db.register(args.producer, args.date, args.location, args.company, args.serial)
+    res = db.register(args.producer, args.date, args.location, args.company,
+                      args.serial, args.port, args.site)
     rec = res["record"]
     print(f"ID:            {rec['id']}")
+    print(f"Короткий код:  {make_id(args.producer, args.date, args.location, args.company, args.serial, args.port, args.site)['short']}")
     print(f"Каноническая:  {rec['canonical']}")
     print(f"Статус:        {'создан новый' if res['created'] else 'уже существовал в базе'}")
 
 
 def cmd_preview(args):
-    rec = make_id(args.producer, args.date, args.location, args.company, args.serial)
-    print(rec["id"])
+    rec = make_id(args.producer, args.date, args.location, args.company,
+                  args.serial, args.port, args.site)
+    print(f"ID:       {rec['id']}")
+    print(f"Короткий: {rec['short']}")
 
 
 def cmd_verify(args):
@@ -37,7 +42,10 @@ def cmd_verify(args):
         record = db.lookup(args.id)
         if record:
             print("В базе:          ✔ найдена запись")
-            for k in ("producer", "date", "location", "company", "serial", "created_at"):
+            for k in ("producer", "date", "location", "company", "serial",
+                      "port", "site", "created_at"):
+                if k not in record:
+                    continue
                 print(f"  {k:14} {record[k]}")
         else:
             print("В базе:          ✘ запись отсутствует")
@@ -54,6 +62,8 @@ def build_parser():
         sp.add_argument("--location", required=True, help="Место положения")
         sp.add_argument("--company", required=True, help="Компания")
         sp.add_argument("--serial", required=True, help="Серийный номер")
+        sp.add_argument("--port", required=True, help="Порт: TN_A / TN_B / TN_C")
+        sp.add_argument("--site", required=True, help="Номер площадки (1..99)")
 
     g = sub.add_parser("generate", help="Сгенерировать ID и сохранить в базу")
     add_gen(g); g.set_defaults(func=cmd_generate)

@@ -22,10 +22,12 @@ SECRET = os.environ.get("IDGEN_SECRET") or None  # необязательный 
 
 class IdInput(BaseModel):
     producer: str = Field(..., min_length=1, description="Производитель")
-    date: str = Field(..., min_length=5, description="Дата (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)")
+    date: str = Field(..., min_length=5, description="Дата (ДД.ММ.ГГГГ / DD:MM:YYYY)")
     location: str = Field(..., min_length=1, description="Место положения")
     company: str = Field(..., min_length=1, description="Компания")
     serial: str = Field(..., min_length=1, description="Серийный номер")
+    port: str = Field(..., min_length=1, description="Порт: TN_A / TN_B / TN_C")
+    site: str = Field(..., min_length=1, description="Номер площадки (1..99)")
 
 
 @app.on_event("startup")
@@ -35,10 +37,11 @@ def _startup() -> None:
 
 @app.post("/api/generate")
 def generate(data: IdInput):
-    """Генерирует ID и сохраняет его во внутреннюю базу."""
+    """Генерирует ID формата v3 и сохраняет его во внутреннюю базу."""
     try:
         res = db.register(data.producer, data.date, data.location,
-                          data.company, data.serial, secret=SECRET)
+                          data.company, data.serial, data.port, data.site,
+                          secret=SECRET)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"created": res["created"], "record": res["record"]}
@@ -49,7 +52,8 @@ def preview(data: IdInput):
     """Показывает ID без сохранения в базу."""
     try:
         rec = make_id(data.producer, data.date, data.location,
-                      data.company, data.serial, secret=SECRET)
+                      data.company, data.serial, data.port, data.site,
+                      secret=SECRET)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return rec
@@ -64,7 +68,9 @@ def verify(id: str = Query(..., description="Код для проверки")):
     if record:
         try:
             expected = make_id(record["producer"], record["date"], record["location"],
-                               record["company"], record["serial"], secret=SECRET)["compact"]
+                               record["company"], record["serial"],
+                               record.get("port", ""), record.get("site", ""),
+                               secret=SECRET)["compact"]
             full_match = expected == record["compact"]
         except ValueError:
             pass
