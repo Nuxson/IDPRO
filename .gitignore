@@ -1,2 +1,3 @@
-__pycache__/
+# Compiled and build artifacts
 *.pyc
+__pycache__/

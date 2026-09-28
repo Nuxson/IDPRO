@@ -1,7 +1,7 @@
 """
 Формат ID v6 — компактный читаемый код «PP + DWC + CC + порт + площадка + хеш + CRC».
 
-Длина: 17 символов, группировка XXXX-XXXX-XXXX-XXX.
+Длина: 19 символов, группировка XXXX-XXXX-XXXX-XXXX-X.
 Пример: RM4KF-VT-A2238HYEQ (условно: производитель с кодом RM из config/producers.json;
         компания VT из config/companies.json; порт TN_A = A; площадка 42 -> '223A';
         хеш 3 символа; контрольный код 2 символа)
@@ -16,13 +16,13 @@
                 автоматически в момент генерации и хранится во внутренней базе.
   [5:7]  CC    — сокращение компании ИЗ СПРАВОЧНИКА config/companies.json
   [7]    S     — порт: TN_A -> A, TN_B -> B, TN_C -> C
-  [8:12] SSSS  — номер площадки, 4 символа compact-алфавита, диапазон 0..99999
+  [8:12] SSSS  — номер площадки, 4 символа compact-алфавита (0..1 336 335)
                 (6 -> '2228', 42 -> '223A'); точно декодируется обратно в число.
 
 Далее:
-  [12:15] HHH  — хеш-часть: SHA-256 от канонической строки полей v6
-                (3 символа compact-алфавита) — кодирует место положения и серийный номер;
-  [15:17] CC   — контрольный код HMAC-SHA256 от тела ID (аналог CRC/IMEI),
+  [12:17] HHHHH — хеш-часть: SHA-256 от канонической строки полей v6
+                (5 символов compact-алфавита) — кодирует место положения и серийный номер;
+  [17:19] CC   — контрольный код HMAC-SHA256 от тела ID (аналог CRC/IMEI),
                 офлайн-проверка без доступа к базе.
 
 Алфавиты: читаемые глазом сегменты (неделя/месяц/день/порт/производитель/компания)
@@ -38,7 +38,7 @@ import hmac
 import re
 from datetime import date
 
-from .codes import CodesError, registry as default_registry
+from .codes import PORTS_FILE, CodesError, registry as default_registry
 
 # ---------- Справочники ----------
 MONTH_CODES = "BCDEFGHJKLMNPQ"        # месяц: B=Январь ... Q=Декабрь (алфавит без 0/O,1/I,L,U,Y)
@@ -56,19 +56,58 @@ BASE36 = len(ALNUM36)                                   # 34
 
 SEP = "-"
 BLOCK = 4
-HASH_LEN = 3                                            # хеш: 3 символа compact-алфавита (~39304 варианта)
+HASH_LEN = 5                                            # хеш: 5 символов compact-алфавита (~45 млн вариантов)
 CHECK_LEN = 2                                           # CRC: 2 символа base36
-SITE_LEN = 4                                            # площадка: 4 символа compact-алфавита (0..99999+)
+SITE_LEN = 4                                            # площадка: 4 символа compact-алфавита
 PREFIX_LEN = 2 + 3 + 2 + 1 + SITE_LEN                   # PP+DWC+CC+порт+площадка = 12
 BODY_LEN = PREFIX_LEN + HASH_LEN                        # 14
-TOTAL_LEN = BODY_LEN + CHECK_LEN                        # 17 символов
-GROUPS = (4, 4, 4, 3)                                   # группировка XXXX-XXXX-XXXX-XXX
+TOTAL_LEN = BODY_LEN + CHECK_LEN                        # 19 символов
+GROUPS = (4, 4, 4, 4, 1)                                  # группировка XXXX-XXXX-XXXX-XXXX-X
 # Примечание: компактный формат сознательно короче прежних 20 символов; последний
 # блок на 3 символа — осознанный компромисс между длиной и коллизиями хеша.
-SITE_MAX = 99999                                        # верхняя граница номера площадки
+# Верхняя граница ограничена ёмкостью кода (4 символа compact-алфавита), а не
+# круглым числом вроде 99/99999. Единственное исключение — младший символ кода
+# площадки: если он попал в "сигнатуру" сегмента даты (неделя 2..6 + месяц +
+# день недели), код из 19 символов мог бы читаться двусмысленно, поэтому такие
+# 4 значения (из 1 336 336) просто не используются.
+def _site_excluded() -> frozenset[int]:
+    """Номер площадки запрещён, если его 4-символьный compact-код сам является
+    допустимым сегментом даты (позиции 2–4 читаются как «неделя+месяц+день»),
+    иначе 19-символьный ID мог бы ambiguously пройти проверку структуры.
+    Полный перебор ёмкости (34^4 ≈ 1.34 млн) выполняется один раз при импорте."""
+    bad = set()
+    for n in range(BASE36 ** SITE_LEN):
+        code = to_base36(n, SITE_LEN)
+        if code[0] in ALPHABET[:5] and code[1] in MONTH_CODES and code[2] in WEEKDAY_CODES:
+            bad.add(n)
+    return frozenset(bad)
+
+
+# вычисляется лениво (см. _get_site_excluded) — зависит от to_base36 ниже
+
+
+_SITE_EXCLUDED_CACHE: frozenset[int] | None = None
+
+
+def site_excluded() -> frozenset[int]:
+    global _SITE_EXCLUDED_CACHE
+    if _SITE_EXCLUDED_CACHE is None:
+        _SITE_EXCLUDED_CACHE = _site_excluded()
+    return _SITE_EXCLUDED_CACHE
+
+
+#: Максимальный номер площадки = формальная ёмкость кода минус зарезервованные
+#: «двусмысленные» значения (обычно это 1 336 335 или чуть меньше).
+SITE_MAX = max(n for n in range(BASE36 ** SITE_LEN) if n not in site_excluded())
 FORMAT_VERSION = "v6"
 
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+#: Префиксы канонизации для автоподбора кодов. Равны текущей версии формата,
+#: поэтому смена FORMAT_VERSION автоматически меняет все ранее предложенные
+#: коды (старые справочники не «наследуются» новым форматом по ошибке).
+_SUGGEST_PREFIX = "v6"
+_PORT_SUGGEST_PREFIX = "v6port"
 
 
 def _norm(value: str) -> str:
@@ -123,35 +162,55 @@ def suggest_code(name: str) -> str:
         letters += "".join(extra)
     if len(letters) >= 2:
         return letters[:2]
-    digest = hashlib.sha256(("v6suggest:" + n).encode()).digest()
+    digest = hashlib.sha256((_SUGGEST_PREFIX + ":" + n).encode()).digest()
     return to_base31(int.from_bytes(digest[:4], "big"), 2)
 
 
-def port_code(port: str) -> str:
-    """Код порта: TN_A -> A, TN_B -> B, TN_C -> C (регистр/разделители не важны)."""
-    key = re.sub(r"[^A-Z0-9]", "_", _norm(port))
-    if key in PORT_CODES:
-        return PORT_CODES[key]
-    compact = key.replace("_", "")
-    if compact in PORT_CODES:
-        return PORT_CODES[compact]
-    raise ValueError(f"Неизвестный порт: {port!r} (допустимо: TN_A, TN_B, TN_C)")
+def port_code(port: str, registry_obj=None) -> str:
+    """Код порта из справочника config/ports.json: TN_A -> A и т.д.
+
+    Программа не хранит бренды/порты жёстко — соответствия задаёт пользователь
+    в JSON-конфиге (стартовый шаблон: TN_A/TN_B/TN_C). Нормализация: регистр,
+    пробелы и любые разделители (_, -, :) не значимы.
+    """
+    key = re.sub(r"[^A-Z0-9]+", "_", _norm(port)).strip("_")
+    try:
+        return (registry_obj or default_registry).port_code(key)
+    except CodesError as e:
+        raise ValueError(str(e)) from e
+
+
+def suggest_port(name: str) -> str:
+    """Рекомендует букву кода порта из названия (для справочника ports.json).
+
+    Берёт первую допустимую букву из транслитерированного имени; если все
+    символы имени неоднозначные — детерминированный код из SHA-256.
+    """
+    tr = _translit(_norm(name))
+    for ch in tr:
+        if ch in ALPHABET and ch not in PORT_CODES.values():
+            return ch
+    digest = hashlib.sha256((_PORT_SUGGEST_PREFIX + ":" + _norm(name)).encode()).digest()
+    return to_base31(int.from_bytes(digest[:4], "big"), 1)
 
 
 def site_code(site: str) -> str:
-    """Код номера площадки: 4 символа compact-алфавита, диапазон 0..99999.
+    """Код номера площадки: 4 символа compact-алфавита.
 
-    Площадка не ограничена 99 и не привязана жёстко к цифрам: любое число
-    0..99999 кодируется четырьмя символами без неоднозначных знаков и точно
-    декодируется обратно (6 -> '2228', 42 -> '223A', 0 -> '2222').
+    Площадка не ограничена 99 и не привязана жёстко к цифрам: любое целое
+    число 0..BASE36**4-1 (= 1 336 335) кодируется четырьмя символами без
+    неоднозначных знаков и точно декодируется обратно
+    (6 -> '2228', 42 -> '223A', 0 -> '2222', 99999 -> 'BBHF').
     """
     s = _norm(site).replace(" ", "")
     s = re.sub(r"^(НОМЕР|NOMER|NO|#)", "", s) or s
     if not re.fullmatch(r"\d+", s):
         raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается целое число)")
     num = int(s)
-    if not 0 <= num <= SITE_MAX:
-        raise ValueError(f"Номер площадки вне диапазона 0..{SITE_MAX}: {site!r}")
+    if not 0 <= num <= SITE_MAX or num in site_excluded():
+        raise ValueError(
+            f"Номер площадки вне допустимого диапазона 0..{SITE_MAX} "
+            f"(зарезервированные значения {sorted(SITE_EXCLUDED)} недоступны): {site!r}")
     return to_base36(num, SITE_LEN)
 
 
@@ -371,16 +430,41 @@ def verify_checksum(raw_id: str, secret: str | None = None) -> bool:
     compact = normalize_id(raw_id)
     if len(compact) != TOTAL_LEN:
         return False
-    if any(ch not in ALNUM36 for ch in compact):
+    if any(ch not in ALNUM36 for ch in compact[:2] + compact[5:PREFIX_LEN]):
+        return False                                   # PP, CC+порт+площадка
+    if any(ch not in ALNUM36 for ch in compact[PREFIX_LEN:]):
+        return False                                   # хеш и контрольный код
+    # Сегменты, читаемые глазами, — на base31 (без неоднозначных U/Y):
+    if compact[0] not in ALPHABET or compact[1] not in ALPHABET:
         return False
-    if compact[2] not in ALPHABET[:5]:                 # неделя в месяце 1..5 (base31)
+    if compact[5] not in ALPHABET or compact[6] not in ALPHABET:
+        return False
+    # Дата: D = неделя месяца (1..5), W = месяц, C = день недели.
+    if compact[2] not in ALPHABET[:5]:
         return False
     if compact[3] not in MONTH_CODES or compact[4] not in WEEKDAY_CODES:
         return False
-    if compact[7] not in PORT_CODES.values():          # порт TN_A/TN_B/TN_C
+    if compact[7] not in _port_names():                # буква порта из ports.json
+        return False
+    # Площадка обязана декодироваться в допустимый диапазон (ловит подмену
+    # старших символов кода площадки на шаблон даты — позиции 2–4).
+    try:
+        n = decode_site(compact[8:PREFIX_LEN])
+    except ValueError:
+        return False
+    if not 0 <= n <= SITE_MAX:
         return False
     body, check = compact[:BODY_LEN], compact[BODY_LEN:]
     return checksum(body, secret) == check
+
+
+def _port_names() -> dict[str, str]:
+    """Обратная таблица буква ID -> название порта из справочника (без ошибок)."""
+    try:
+        ports = default_registry.ports
+    except Exception:
+        ports = dict(PORT_CODES)
+    return {v: k for k, v in ports.items()}
 
 
 def extract_parts(raw_id: str) -> dict:
@@ -403,5 +487,5 @@ def extract_parts(raw_id: str) -> dict:
         parts["site_number"] = decode_site(c[8:PREFIX_LEN]) if len(c) >= PREFIX_LEN else None
     except ValueError:
         parts["site_number"] = None
-    parts["port_name"] = {v: k for k, v in PORT_CODES.items()}.get(c[7])
+    parts["port_name"] = _port_names().get(c[7])
     return parts

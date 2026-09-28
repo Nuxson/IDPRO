@@ -15,7 +15,7 @@
  *                   при генерации и хранится во внутренней базе.
  *   [5:7]   CC    — сокращение компании ИЗ СПРАВОЧНИКА config/companies.json
  *   [7]     S     — порт: TN_A -> A, TN_B -> B, TN_C -> C
- *   [8:12]  SSSS  — номер площадки compact-алфавита, 4 символа (0..99999): 6 -> '2228', 42 -> '223A'
+ *   [8:12]  SSSS  — номер площадки compact-алфавита, 4 символа (0..1 336 335): 6 -> '2228', 42 -> '223A'
  *   [12:15] HHH   — хеш SHA-256 от канонической строки v6 (место + серийный и др.)
  *   [15:17] CC    — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
  *
@@ -40,11 +40,22 @@
   const ALNUM36 = '23456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'; // сжатые сегменты: без 0/O, 1/I/L
   const BASE36 = ALNUM36.length;                     // 34
   const SEP = '-';
-  const GROUPS = [4, 4, 4, 3];                        // XXXX-XXXX-XXXX-XXX
+  const GROUPS = [4, 4, 4, 4, 1];               // XXXX-XXXX-XXXX-XXXX-X
   const CHECK_LEN = 2;
-  const HASH_LEN = 3;                                 // хеш: 3 символа compact-алфавита
-  const SITE_LEN = 4;                                 // площадка: 4 символа compact-алфавита (0..99999)
-  const SITE_MAX = 99999;
+  const HASH_LEN = 5;                                 // хеш: 5 символов compact-алфавита (~45 млн вариантов)
+  const SITE_LEN = 4;                                 // площадка: 4 символа compact-алфавита
+  // Зарезервированы номера площадок, чей 4-символьный код совпадает с допустимым
+  // сегментом даты (позиции 2-4), чтобы 19-символьный ID читались однозначно:
+  const SITE_EXCLUDED = (() => {
+    const bad = new Set();
+    const cap = Math.pow(BASE36, SITE_LEN);                // 1 336 336
+    for (let n = 0n; n < BigInt(cap); n++) {
+      const code = toBase36(Number(n), SITE_LEN);          // то же преобразование, что ниже
+      if (ALPHABET.slice(0, 5).includes(code[0]) && MONTH_CODES.includes(code[1]) &&
+          WEEKDAY_CODES.includes(code[2])) bad.add(Number(n));
+    }
+    return bad;
+  })();
   const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 12
   const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 15
   const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 17
@@ -182,7 +193,7 @@
     if (PORT_CODES[key]) return PORT_CODES[key];
     const compact = key.replace(/_/g, '');
     if (PORT_CODES[compact]) return PORT_CODES[compact];
-    throw new Error(`Неизвестный порт: "${port}" (допустимо: TN_A, TN_B, TN_C)`);
+    throw new Error(`Неизвестный порт: "${port}". Допустимые значения — из справочника config/ports.json (по умолчанию TN_A, TN_B, TN_C).`);
   }
 
   function siteCode(site) {
