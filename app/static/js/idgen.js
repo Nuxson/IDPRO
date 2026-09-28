@@ -40,7 +40,7 @@
   const ALNUM36 = '23456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'; // сжатые сегменты: без 0/O, 1/I/L
   const BASE36 = ALNUM36.length;                     // 34
   const SEP = '-';
-  const GROUPS = [4, 4, 4, 4, 1];               // XXXX-XXXX-XXXX-XXXX-X
+  const GROUPS = [4, 4, 4, 4, 3];               // XXXX-XXXX-XXXX-XXXX-XXX
   const CHECK_LEN = 2;
   const HASH_LEN = 5;                                 // хеш: 5 символов compact-алфавита (~45 млн вариантов)
   const SITE_LEN = 4;                                 // площадка: 4 символа compact-алфавита
@@ -57,8 +57,8 @@
     return bad;
   })();
   const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 12
-  const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 15
-  const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 17
+  const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 17
+  const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 19
   const FORMAT_VERSION = 'v6';
 
   const MONTH_CODES = 'BCDEFGHJKLMNPQ';               // B=Январь ... Q=Декабрь

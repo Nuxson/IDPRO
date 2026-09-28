@@ -62,19 +62,41 @@ SITE_LEN = 4                                            # площадка: 4 с
 PREFIX_LEN = 2 + 3 + 2 + 1 + SITE_LEN                   # PP+DWC+CC+порт+площадка = 12
 BODY_LEN = PREFIX_LEN + HASH_LEN                        # 14
 TOTAL_LEN = BODY_LEN + CHECK_LEN                        # 19 символов
-GROUPS = (4, 4, 4, 4, 1)                                  # группировка XXXX-XXXX-XXXX-XXXX-X
+GROUPS = (4, 4, 4, 4, 3)                                  # группировка XXXX-XXXX-XXXX-XXXX-XXX
 # Примечание: компактный формат сознательно короче прежних 20 символов; последний
-# блок на 3 символа — осознанный компромисс между длиной и коллизиями хеша.
+# блок короткий — осознанный компромисс между длиной и коллизиями.
 # Верхняя граница ограничена ёмкостью кода (4 символа compact-алфавита), а не
-# круглым числом вроде 99/99999. Единственное исключение — младший символ кода
-# площадки: если он попал в "сигнатуру" сегмента даты (неделя 2..6 + месяц +
-# день недели), код из 19 символов мог бы читаться двусмысленно, поэтому такие
-# 4 значения (из 1 336 336) просто не используются.
+# круглым числом вроде 99/99999. Единственное исключение — старшие три символа
+# кода площадки: если они попали в "сигнатуру" сегмента даты (неделя 1..5 +
+# месяц + день недели), 19-символьный код мог бы читаться двусмысленно при
+# сдвиге группировки, поэтому такие значения просто не используются.
+
+def _to_base(number: int, length: int, alphabet: str, base: int) -> str:
+    out = []
+    for _ in range(length):
+        number, rem = divmod(number, base)
+        out.append(alphabet[rem])
+    return "".join(reversed(out))
+
+
+def to_base31(number: int, length: int) -> str:
+    return _to_base(number, length, ALPHABET, BASE)
+
+
+def to_base36(number: int, length: int) -> str:
+    """Кодирование для сжатых сегментов (площадка/хеш/CRC): алфавит 34 символа."""
+    return _to_base(number, length, ALNUM36, BASE36)
+
+
 def _site_excluded() -> frozenset[int]:
-    """Номер площадки запрещён, если его 4-символьный compact-код сам является
-    допустимым сегментом даты (позиции 2–4 читаются как «неделя+месяц+день»),
-    иначе 19-символьный ID мог бы ambiguously пройти проверку структуры.
-    Полный перебор ёмкости (34^4 ≈ 1.34 млн) выполняется один раз при импорте."""
+    """Множество запрещённых номеров площадок.
+
+    Площадка n запрещена, если её compact-код c[0..3] имеет вид
+    c[0]∈ALPHABET[:5] (неделя), c[1]∈MONTH_CODES, c[2]∈WEEKDAY_CODES —
+    тогда фрагмент кода совпадает с сегментом даты DWC. Вычисляется
+    конструктором (перебор 34^4 ≈ 1.34 млн) ровно один раз при импорте,
+    после чего используется только кэш.
+    """
     bad = set()
     for n in range(BASE36 ** SITE_LEN):
         code = to_base36(n, SITE_LEN)
@@ -83,22 +105,21 @@ def _site_excluded() -> frozenset[int]:
     return frozenset(bad)
 
 
-# вычисляется лениво (см. _get_site_excluded) — зависит от to_base36 ниже
-
-
-_SITE_EXCLUDED_CACHE: frozenset[int] | None = None
+#: Зарезервированные номера площадок (кэш, см. _site_excluded)
+SITE_EXCLUDED: frozenset[int] = _site_excluded()
 
 
 def site_excluded() -> frozenset[int]:
-    global _SITE_EXCLUDED_CACHE
-    if _SITE_EXCLUDED_CACHE is None:
-        _SITE_EXCLUDED_CACHE = _site_excluded()
-    return _SITE_EXCLUDED_CACHE
+    """Публичный доступ к множеству зарезервированных номеров площадок."""
+    return SITE_EXCLUDED
 
 
 #: Максимальный номер площадки = формальная ёмкость кода минус зарезервованные
 #: «двусмысленные» значения (обычно это 1 336 335 или чуть меньше).
-SITE_MAX = max(n for n in range(BASE36 ** SITE_LEN) if n not in site_excluded())
+SITE_MAX = BASE36 ** SITE_LEN - 1
+while SITE_MAX in SITE_EXCLUDED:
+    SITE_MAX -= 1
+
 FORMAT_VERSION = "v6"
 
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
@@ -325,23 +346,6 @@ def norm_date(value: str) -> str:
         return date(y, mo, d).isoformat()
     except ValueError as e:
         raise ValueError(f"Несуществующая дата: {value!r}") from e
-
-
-def to_base31(number: int, length: int) -> str:
-    return _to_base(number, length, ALPHABET, BASE)
-
-
-def to_base36(number: int, length: int) -> str:
-    """Кодирование для сжатых сегментов (площадка/хеш/CRC): алфавит 34 символа."""
-    return _to_base(number, length, ALNUM36, BASE36)
-
-
-def _to_base(number: int, length: int, alphabet: str, base: int) -> str:
-    out = []
-    for _ in range(length):
-        number, rem = divmod(number, base)
-        out.append(alphabet[rem])
-    return "".join(reversed(out))
 
 
 def checksum(body: str, secret: str | None = None) -> str:
