@@ -66,7 +66,7 @@ def build_parser():
         sp.add_argument("--company", required=True, help="Компания")
         sp.add_argument("--serial", required=True, help="Серийный номер")
         sp.add_argument("--port", required=True, help="Порт: TN_A / TN_B / TN_C")
-        sp.add_argument("--site", required=True, help="Номер площадки (0..99999)")
+        sp.add_argument("--site", required=True, help="Номер площадки (целое число)")
 
     g = sub.add_parser("generate", help="Сгенерировать ID и сохранить в базу (дата — автоматически)")
     add_gen(g); g.set_defaults(func=cmd_generate)

@@ -12,9 +12,9 @@ BASE = dict(producer="Роботех", location="Москва",
 def test_format():
     r = make_id(**BASE, dt="15.03.2026")
     compact = normalize_id(r["id"])
-    assert len(compact) == TOTAL_LEN == 21
+    assert len(compact) == TOTAL_LEN == 20
     assert all(ch in ALPHABET for ch in compact)
-    assert r["id"].count("-") == TOTAL_LEN // 4   # блоки по 4 + хвост
+    assert r["id"] == "-".join(compact[i:i+4] for i in range(0, 20, 4))  # ровно 5 блоков по 4
 
 
 def test_date_is_automatic():
@@ -58,17 +58,18 @@ def test_secret_changes_checksum():
     assert not verify_checksum(secret)                 # без секрета не проходит
 
 
-def test_site_range_zero_to_99999():
-    for s in ("0", "1", "6", "99", "100", "4242", "99999"):
+def test_site_range_zero_to_max():
+    for s in ("0", "1", "6", "99", "100", "4242", "99999", "923520"):
         r = make_id(**{**BASE, "site": s}, dt="15.03.2026")
         assert verify_checksum(r["id"]), s
         parts = extract_parts(r["id"])
         assert parts["site_number"] == int(s), s       # точное восстановление из кода
-    assert site_code("6") == "22228"
+    assert site_code("6") == "2228"
     assert decode_site(site_code("99999")) == 99999
+    assert decode_site(site_code("923520")) == 923520
 
 
-@pytest.mark.parametrize("bad", ["abc", "-5", "100000", "1.5", "999999999999"])
+@pytest.mark.parametrize("bad", ["abc", "-5", "1.5", "923521", "999999999999"])
 def test_invalid_site(bad):
     with pytest.raises(ValueError):
         make_id(**{**BASE, "site": bad}, dt="15.03.2026")

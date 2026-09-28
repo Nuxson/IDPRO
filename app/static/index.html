@@ -50,8 +50,8 @@
         <select name="port" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--txt);font-size:1rem">
           <option value="TN_A">TN_A</option><option value="TN_B">TN_B</option><option value="TN_C">TN_C</option>
         </select>
-        <label>Номер площадки (0–99999)</label>
-        <input name="site" type="number" min="0" max="99999" step="1" placeholder="напр. 6 или 1024" required>
+        <label>Номер площадки</label>
+        <input name="site" inputmode="numeric" pattern="[0-9]+" title="Только цифры, без ограничений по разряду" placeholder="напр. 0, 6 или 1024" required>
         <button type="submit">Сгенерировать и сохранить</button>
       </form>
       <div class="result" id="genResult"></div>
@@ -62,7 +62,7 @@
       <h2>Проверить ID</h2>
       <form id="verForm">
         <label>Код для проверки</label>
-        <input name="id" placeholder="напр. ER2H-FMSA-2222-8XXX-XXXX-YZ" required style="letter-spacing:1px">
+        <input name="id" placeholder="напр. ER2J-EMSC-223D-C5K6-MEUD" required style="letter-spacing:1px">
         <button type="submit">Проверить</button>
       </form>
       <div class="result" id="verResult"></div>

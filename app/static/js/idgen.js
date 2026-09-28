@@ -2,7 +2,7 @@
  * idgen.js — JS-порт ядра генерации уникальных ID (работает в браузере и Node.js).
  *
  * Полностью совместим с Python-версией app/idgen.py: те же входные данные → тот же код.
- * Формат ID v4: PP DWC CC порт площадка(5) + хеш(6) + CRC(2), блоки по 4 символа.
+ * Формат ID v4: PP DWC CC порт площадка(4) + хеш(6) + CRC(2) = 20 символов, 5 блоков по 4.
  *
  * Состав компактного кода:
  *   [0:2]  PP     — код производителя (транслит; Ericsson/Эрикссон -> ER)
@@ -12,7 +12,7 @@
  *                  при генерации и хранится во внутренней базе.
  *   [5:7]  CC     — сокращение компании по инициалам слов (Масштаб-Связь -> MS)
  *   [7]    S      — порт: TN_A -> A, TN_B -> B, TN_C -> C
- *   [8:13] SSSSS  — номер площадки base31, ровно 5 символов (0..99999): 6 -> '22228'
+ *   [8:12] SSSS   — номер площадки base31, 4 символа (0..923520): 6 -> '2228'
  *   [13:19]       — хеш SHA-256 от канонической строки v4 (место + серийный и др.)
  *   [19:21]       — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
  *
@@ -37,8 +37,8 @@
   const BLOCK = 4;
   const CHECK_LEN = 2;
   const HASH_LEN = 6;
-  const SITE_LEN = 5;                                 // номер площадки: ровно 5 символов base31
-  const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 13
+  const SITE_LEN = 4;                                 // номер площадки: 4 символа base31 (0..923520)
+  const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 12
   const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 19
   const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 21
 
@@ -68,7 +68,8 @@
     return _sha256Pure(bytes);
   }
 
-  // Чистый JS SHA-256 (используется только если недоступен WebCrypto)
+  // Чистый JS SHA-256 (используется только если недоступен WebCrypto).
+  // Проверенная реализация FIPS 180-4; совпадает с Node crypto и Python hashlib.
   const KK = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -80,47 +81,42 @@
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
   ];
   function _sha256Pure(msg) {
-    const rotr = (x, n) => ((x >>> n) | (x << (32 - n))) >>> 0;
     if (KK.length !== 64) throw new Error('KK table must contain 64 constants');
+    const rotr = (x, n) => ((x >>> n) | (x << (32 - n))) >>> 0;
     let h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
     const len = msg.length;
-    const total = ((((len + 8) >> 6) + 1) << 6);          // паддинг: 0x80 + 8 байт длины
-    const withPad = new Uint8Array(total);
-    withPad.set(msg); withPad[len] = 0x80;
-    const bitsLo = (len * 8) >>> 0, bitsHi = Math.floor(len / 536870912) >>> 0;  // длина в битах (64 бит BE)
-    withPad[total - 4] = (bitsHi >>> 24) & 255; withPad[total - 3] = (bitsHi >>> 16) & 255;
-    withPad[total - 2] = (bitsHi >>> 8) & 255;  withPad[total - 1] = bitsHi & 255;
-    withPad[total - 8] = (bitsLo >>> 24) & 255; withPad[total - 7] = (bitsLo >>> 16) & 255;
-    withPad[total - 6] = (bitsLo >>> 8) & 255;  withPad[total - 5] = bitsLo & 255;
+    const padded = new Uint8Array((((len + 8) >> 6) + 1) << 6);
+    padded.set(msg);
+    padded[len] = 0x80;
+    const bits = len * 8;
+    const view = new DataView(padded.buffer);
+    view.setUint32(padded.length - 8, Math.floor(bits / 0x100000000), false);
+    view.setUint32(padded.length - 4, bits >>> 0, false);
     const w = new Uint32Array(64);
-    for (let off = 0; off < total; off += 64) {
-      for (let i = 0; i < 16; i++) {
-        w[i] = ((withPad[off + i * 4] << 24) | (withPad[off + i * 4 + 1] << 16) |
-               (withPad[off + i * 4 + 2] << 8) | withPad[off + i * 4 + 3]) >>> 0;
-      }
+    for (let off = 0; off < padded.length; off += 64) {
+      for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4, false);
       for (let i = 16; i < 64; i++) {
-        const s0 = (rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3)) >>> 0;
-        const s1 = (rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10)) >>> 0;
+        const x = w[i - 15], y = w[i - 2];
+        const s0 = (rotr(x, 7) ^ rotr(x, 18) ^ (x >>> 3)) >>> 0;
+        const s1 = (rotr(y, 17) ^ rotr(y, 19) ^ (y >>> 10)) >>> 0;
         w[i] = (((w[i - 16] + s0) >>> 0) + ((w[i - 7] + s1) >>> 0)) >>> 0;
       }
       let [a, b, c, d, e, f, g, hh] = h;
       for (let i = 0; i < 64; i++) {
         const S1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
         const ch = ((e & f) ^ (~e & g)) >>> 0;
-        const t1 = (((hh + S1) >>> 0) + (((ch + KK[i]) >>> 0) + w[i])) >>> 0;
+        const t1 = ((((hh + S1) >>> 0) + ((ch + KK[i]) >>> 0)) + w[i]) >>> 0;
         const S0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
         const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
         const t2 = (S0 + maj) >>> 0;
-        hh = g; g = f; f = e; e = ((d + t1) >>> 0); d = c; c = b; b = a; a = ((t1 + t2) >>> 0);
+        hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
       }
       const add = [a, b, c, d, e, f, g, hh];
       h = h.map((x, i) => (x + add[i]) >>> 0);
     }
     const out = new Uint8Array(32);
-    h.forEach((x, i) => {
-      out[i * 4] = x >>> 24; out[i * 4 + 1] = (x >>> 16) & 255;
-      out[i * 4 + 2] = (x >>> 8) & 255; out[i * 4 + 3] = x & 255;
-    });
+    const ov = new DataView(out.buffer);
+    h.forEach((x, i) => ov.setUint32(i * 4, x, false));
     return out;
   }
 
@@ -153,14 +149,15 @@
   // Только символы алфавита base31 (как _readable в Python): Эрикссон -> ER
   const readable = (text) => [...translit(norm(text))].filter((ch) => ALPHABET.includes(ch)).join('');
 
-  function producerCode(name) {
+  async function producerCode(name) {
     const n = norm(name);
     if (PRODUCER_ALIASES[n]) return PRODUCER_ALIASES[n];
     const letters = readable(n);
     if (letters.length >= 2) return letters.slice(0, 2);
-    // детерминированный запасной путь (в Python — sha256("v3p:"+n)[:4]);
-    // синхронность с Python гарантируется для алиасов и читаемых имён
-    throw new Error(`Не удалось построить читаемый код производителя: ${name}`);
+    // Детерминированный запасной путь — как в Python: sha256("v4p:"+n)[:4] -> base31(2).
+    // Асинхронный (WebCrypto), поэтому makeId вызывает его через await.
+    const d = await sha256Bytes(new TextEncoder().encode('v4p:' + n));
+    return toBase31(digestToBigint(d, 4), 2);
   }
 
   function companyAbbr(name) {
@@ -187,15 +184,17 @@
   function siteCode(site) {
     let s = norm(site).replace(/ /g, '');
     s = s.replace(/^(НОМЕР|NOMER|NO|#)/, '') || s;   // как в Python: re.sub(...) or s
-    if (!/^\d+$/.test(s)) throw new Error(`Некорректный номер площадки: "${site}" (ожидается число 0..99999)`);
+    if (!/^\d+$/.test(s)) throw new Error(`Некорректный номер площадки: "${site}" (ожидается целое число)`);
     const num = Number(s);
-    if (num < 0 || num > 99999) throw new Error(`Номер площадки вне диапазона 0..99999: "${site}"`);
-    return toBase31(num, SITE_LEN);                   // ровно 5 символов: 6 -> '22228'
+    if (!Number.isSafeInteger(num) || num < 0 || num >= BASE ** SITE_LEN) {
+      throw new Error(`Номер площадки вне диапазона 0..${BASE ** SITE_LEN - 1}: "${site}"`);
+    }
+    return toBase31(num, SITE_LEN);                   // 4 символа: 6 -> '2228', 42 -> '223D'
   }
 
-  function decodeSite(code5) {                        // обратный разбор: '22228' -> 6
+  function decodeSite(code4) {                        // обратный разбор: '2228' -> 6
     let n = 0n;
-    for (const ch of String(code5).toUpperCase()) {
+    for (const ch of String(code4).toUpperCase()) {
       const idx = ALPHABET.indexOf(ch);
       if (idx < 0) throw new Error('Недопустимый символ кода площадки: ' + ch);
       n = n * BigInt(BASE) + BigInt(idx);
@@ -274,7 +273,7 @@
     const hashPart = toBase31(digestToBigint(digest, 8), HASH_LEN);
 
     const sitePart = siteCode(ST);
-    const prefixPart = producerCode(P) + dateSegment(iso) + companyAbbr(C) + portCode(PT) + sitePart;
+    const prefixPart = await producerCode(P) + dateSegment(iso) + companyAbbr(C) + portCode(PT) + sitePart;
     const body = prefixPart + hashPart;
     const full = body + await checksum(body, secret);
     const blocks = [];
@@ -291,7 +290,7 @@
   }
 
   const normalizeId = (raw) =>
-    [...String(raw ?? '').replace(/[\s\-_]+/g, '').toUpperCase()].filter((ch) => ALPHABET.includes(ch)).join('');
+    String(raw ?? '').replace(/[\s\-_]+/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   // 'Сегодня' в локальном часовом поясе браузера (как date.today() в Python)
   function localIsoToday() {

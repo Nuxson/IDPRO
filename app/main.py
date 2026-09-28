@@ -26,7 +26,7 @@ class IdInput(BaseModel):
     company: str = Field(..., min_length=1, description="Компания")
     serial: str = Field(..., min_length=1, description="Серийный номер")
     port: str = Field(..., min_length=1, description="Порт: TN_A / TN_B / TN_C")
-    site: str = Field(..., min_length=1, description="Номер площадки (0..99999)")
+    site: str = Field(..., min_length=1, description="Номер площадки (целое число)")
 
 
 @app.on_event("startup")
@@ -66,13 +66,20 @@ def verify(id: str = Query(..., description="Код для проверки")):
     full_match = False
     if record:
         try:
-            expected = make_id(record["producer"], record["date"], record["location"],
+            expected = make_id(record["producer"], record["location"],
                                record["company"], record["serial"],
                                record.get("port", ""), record.get("site", ""),
-                               secret=SECRET)["compact"]
+                               dt=record["date"], secret=SECRET)["compact"]
             full_match = expected == record["compact"]
-        except ValueError:
-            pass
+        except ValueError as e:
+            # Данные записи несовместимы с текущим форматом (например, площадка вне
+            # диапазона после смены формата) — не падаем 500, а честно сообщаем.
+            return {
+                "input": id, "checksum_valid": checksum_ok,
+                "found_in_db": True, "authentic": False,
+                "parts": extract_parts(id), "record": record,
+                "warning": f"Не удалось пересчитать ID по записям базы: {e}",
+            }
     return {
         "input": id,
         "checksum_valid": checksum_ok,
