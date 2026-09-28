@@ -1,1 +1,6 @@
+# Compiled files
 __pycache__/
+*.pyc
+
+# Database files
+ids.db

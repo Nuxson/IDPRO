@@ -2,27 +2,33 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from .idgen import make_id, normalize_id
 
 DB_PATH = Path(__file__).resolve().parent.parent / "ids.db"
 
+# Единственная дата в системе — дата выдачи UID (created_at), часовой пояс системный.
+DATE_COL = "created_at"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ids (
-    id          TEXT PRIMARY KEY,      -- сформированный код формата v4 (XXXX-XXXX-...)
+    id          TEXT PRIMARY KEY,      -- сформированный код (XXXX-XXXX-...)
     compact     TEXT UNIQUE,           -- код без разделителей
     producer    TEXT NOT NULL,
-    date        TEXT NOT NULL,         -- ISO YYYY-MM-DD
+    date        TEXT NOT NULL,         -- СЛУЖЕБНАЯ: ISO-дата, зашитая в каноническую строку
     location    TEXT NOT NULL,
     company     TEXT NOT NULL,
     serial      TEXT NOT NULL,
     port        TEXT NOT NULL,         -- TN_A / TN_B / TN_C
     site        TEXT NOT NULL,         -- номер площадки (целое число)
     canonical   TEXT NOT NULL,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL,         -- дата/время выдачи UID (системный часовой пояс)
     UNIQUE (producer, date, location, company, serial, port, site)
 );
 """
@@ -30,14 +36,28 @@ CREATE TABLE IF NOT EXISTS ids (
 _PORT_COLS = ("port", "site")
 
 
+def now_stamp() -> str:
+    """Метка времени выдачи UID в системном часовом поясе (без смещения UTC)."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Добавляет колонки port/site в БД старого (v1) формата."""
+    """Добавляет колонки port/site и чинит дубли дат в БД старых форматов."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(ids)")}
     if not cols:
         return
     for col in _PORT_COLS:
         if col not in cols:
             conn.execute(f"ALTER TABLE ids ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+    # Дедупликация дат: created_at переводим в локальное время (было UTC from SQLite),
+    # а старые записи с created_at='date ... 00:00:00' схлопываем в саму дату выдачи.
+    rows = conn.execute("SELECT rowid, date, created_at FROM ids").fetchall()
+    for rowid, d, ca in rows:
+        if not ca or ca == "":
+            conn.execute("UPDATE ids SET created_at=? WHERE rowid=?",
+                         (f"{d} 00:00:00", rowid))
+        elif d and ca.startswith(d) and ca.endswith("00:00:00"):
+            conn.execute("UPDATE ids SET created_at=? WHERE rowid=?", (ca[:10], rowid))
 
 
 _INIT_DONE: dict[str, str] = {}
@@ -98,14 +118,15 @@ def register(producer: str, location: str, company: str, serial: str,
     rec = make_id(producer, location, company, serial, port, site, secret)
     f = rec["fields"]
     uniq = (f["producer"], f["date"], f["location"], f["company"], f["serial"], f["port"], f["site"])
+    stamp = now_stamp()  # единственная дата — момент выдачи UID (системный TZ)
     with get_conn(db_path) as conn:
         _migrate(conn)  # совместимость со старыми БД (v1 без port/site)
         cur = conn.execute(
-            """INSERT INTO ids (id, compact, producer, date, location, company, serial, port, site, canonical)
-               VALUES (?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO ids (id, compact, producer, date, location, company, serial, port, site, canonical, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (producer, date, location, company, serial, port, site) DO NOTHING""",
             (rec["id"], rec["compact"], f["producer"], f["date"], f["location"],
-             f["company"], f["serial"], f["port"], f["site"], rec["canonical"]),
+             f["company"], f["serial"], f["port"], f["site"], rec["canonical"], stamp),
         )
         if cur.rowcount == 0:  # такая запись уже есть — возвращаем её
             row = conn.execute(
@@ -132,3 +153,102 @@ def list_ids(limit: int = 100, db_path: Path | str = DB_PATH) -> list[dict]:
             "SELECT * FROM ids ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------- Экспорт данных (CSV / Excel) ----------
+
+EXPORT_HEADERS = {
+    "id": "UID",
+    "producer": "Производитель",
+    "created_at": "Дата выдачи",
+    "location": "Место положения",
+    "company": "Компания",
+    "serial": "Серийный номер",
+    "port": "Порт",
+    "site": "Номер площадки",
+}
+EXPORT_ORDER = ("id", "producer", "created_at", "location",
+                "company", "serial", "port", "site")
+
+
+def export_rows(db_path: Path | str = DB_PATH) -> list[dict]:
+    """Все записи для экспорта, отсортированные по дате выдачи."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute("SELECT * FROM ids ORDER BY created_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def export_csv(db_path: Path | str = DB_PATH) -> bytes:
+    """CSV с BOM (Excel корректно открывает кириллицу), разделитель — точка с запятой."""
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    w.writerow(EXPORT_HEADERS[c] for c in EXPORT_ORDER)
+    for r in export_rows(db_path):
+        w.writerow([r.get(c, "") for c in EXPORT_ORDER])
+    return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
+
+
+def export_xlsx(db_path: Path | str = DB_PATH) -> bytes:
+    """Файл .xlsx без внешних зависимостей (минимальный OOXML-пакет)."""
+    import zipfile
+
+    def esc(v) -> str:
+        s = str(v if v is not None else "")
+        return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    def cell(ref: str, val) -> str:
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return f'<c r="{ref}"><v>{val}</v></c>'
+        return f'<c r="{ref}" t="inlineStr"><is><t>{esc(val)}</t></is></c>'
+
+    rows_xml = []
+    all_rows = [[EXPORT_HEADERS[c] for c in EXPORT_ORDER]]
+    for r in export_rows(db_path):
+        line = []
+        for c in EXPORT_ORDER:
+            v = r.get(c, "")
+            if c == "site":
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    pass
+            line.append(v)
+        all_rows.append(line)
+    for i, line in enumerate(all_rows, start=1):
+        cells = "".join(
+            cell(f"{chr(ord('A') + j)}{i}", v) for j, v in enumerate(line))
+        rows_xml.append(f'<row r="{i}">{cells}</row>')
+
+    sheet = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+             f'<sheetData>{"".join(rows_xml)}</sheetData></worksheet>')
+    workbook = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+                ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="UID" sheetId="1" r:id="rId1"/></sheets></workbook>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+            'officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '</Relationships>')
+    content_types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                     '<Default Extension="xml" ContentType="application/xml"/>'
+                     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                     '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                     '</Types>')
+    root_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+                 'officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                 '</Relationships>')
+
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", root_rels)
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", rels)
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    return bio.getvalue()

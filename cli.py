@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from app import db
 from app import codes as codes_mod
@@ -58,7 +59,7 @@ def cmd_generate(args):
     rec = res["record"]
     print(f"ID:            {rec['id']}")
     print(f"Короткий код:  {make_id(rec['producer'], rec['location'], rec['company'], rec['serial'], rec['port'], rec['site'], dt=rec['date'])['short']}")
-    print(f"Дата (авто):   {rec['date']}")
+    print(f"Дата выдачи UID: {rec['created_at']} (системный часовой пояс)")
     print(f"Каноническая:  {rec['canonical']}")
     print(f"Статус:        {'создан новый' if res['created'] else 'уже существовал в базе'}")
 
@@ -79,11 +80,12 @@ def cmd_verify(args):
         record = db.lookup(args.id)
         if record:
             print("В базе:          ✔ найдена запись")
-            for k in ("producer", "date", "location", "company", "serial",
+            for k in ("producer", "location", "company", "serial",
                       "port", "site", "created_at"):
                 if k not in record:
                     continue
-                print(f"  {k:14} {record[k]}")
+                label = "Дата выдачи UID" if k == "created_at" else k
+                print(f"  {label:14} {record[k]}")
         else:
             print("В базе:          ✘ запись отсутствует")
     return 0 if ok else 1
@@ -120,6 +122,20 @@ def build_parser():
 
     c = sub.add_parser("verify", help="Проверить ID (CRC + поиск в базе)")
     c.add_argument("id"); c.set_defaults(func=cmd_verify)
+
+    def cmd_export(args):
+        db.init_db()
+        data = db.export_xlsx() if args.fmt == "xlsx" else db.export_csv()
+        out = Path(args.out) if args.out else Path(f"ids.{args.fmt}")
+        out.write_bytes(data)
+        n = len(db.export_rows())
+        print(f"Экспортировано записей: {n} → {out}")
+        return 0
+
+    e = sub.add_parser("export", help="Экспорт базы выданных UID в CSV или Excel (.xlsx)")
+    e.add_argument("--fmt", choices=["csv", "xlsx"], default="csv")
+    e.add_argument("--out", help="Имя файла (по умолчанию ids.csv / ids.xlsx)")
+    e.set_defaults(func=cmd_export)
     return p
 
 
