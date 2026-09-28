@@ -2,8 +2,8 @@
  * idgen.js — JS-порт ядра генерации уникальных ID (работает в браузере и Node.js).
  *
  * Полностью совместим с Python-версией app/idgen.py: те же входные данные + тот же
- * справочник кодов → тот же код. Формат ID v6: PP DWC CC порт площадка(4) + хеш(3) + CRC(2)
- * = 17 символов, группировка XXXX-XXXX-XXXX-XXX.
+ * справочник кодов → тот же код. Формат ID v6: PP DWC CC порт площадка(4) + хеш(5) + CRC(2)
+ * = 19 символов, группировка XXXX-XXXX-XXXX-XXXX-XXX.
  *
  * Состав компактного кода:
  *   [0:2]   PP    — код производителя ИЗ СПРАВОЧНИКА config/producers.json
@@ -16,8 +16,8 @@
  *   [5:7]   CC    — сокращение компании ИЗ СПРАВОЧНИКА config/companies.json
  *   [7]     S     — порт: TN_A -> A, TN_B -> B, TN_C -> C
  *   [8:12]  SSSS  — номер площадки compact-алфавита, 4 символа (0..1 336 335): 6 -> '2228', 42 -> '223A'
- *   [12:15] HHH   — хеш SHA-256 от канонической строки v6 (место + серийный и др.)
- *   [15:17] CC    — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
+ *   [12:17] HHHHH — хеш SHA-256 от канонической строки v6 (место + серийный и др.)
+ *   [17:19] CC    — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
  *
  * Использование (браузер):
  *   await IdGen.loadCodes();            // загружает справочники с сервера
@@ -44,18 +44,6 @@
   const CHECK_LEN = 2;
   const HASH_LEN = 5;                                 // хеш: 5 символов compact-алфавита (~45 млн вариантов)
   const SITE_LEN = 4;                                 // площадка: 4 символа compact-алфавита
-  // Зарезервированы номера площадок, чей 4-символьный код совпадает с допустимым
-  // сегментом даты (позиции 2-4), чтобы 19-символьный ID читались однозначно:
-  const SITE_EXCLUDED = (() => {
-    const bad = new Set();
-    const cap = Math.pow(BASE36, SITE_LEN);                // 1 336 336
-    for (let n = 0n; n < BigInt(cap); n++) {
-      const code = toBase36(Number(n), SITE_LEN);          // то же преобразование, что ниже
-      if (ALPHABET.slice(0, 5).includes(code[0]) && MONTH_CODES.includes(code[1]) &&
-          WEEKDAY_CODES.includes(code[2])) bad.add(Number(n));
-    }
-    return bad;
-  })();
   const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 12
   const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 17
   const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 19
@@ -63,7 +51,18 @@
 
   const MONTH_CODES = 'BCDEFGHJKLMNPQ';               // B=Январь ... Q=Декабрь
   const WEEKDAY_CODES = 'ABCDEFG';                    // A=Понедельник ... F=Пятница, G=Вс
-  const PORT_CODES = { TN_A: 'A', TN_B: 'B', TN_C: 'C' };
+  let PORT_CODES = { TN_A: 'A', TN_B: 'B', TN_C: 'C' };  // заменяется из /api/codes (ports.json)
+
+  // Ёмкость кода площадки (без перебора — проверка двусмысленности O(1), как в idgen.py):
+  const SITE_CAPACITY = Math.pow(BASE36, SITE_LEN);   // 1 336 336
+  const SITE_MAX = SITE_CAPACITY - 1;                 // 1 336 335
+  function isSiteAmbiguous(num) {
+    if (!(num >= 0 && num < SITE_CAPACITY)) throw new Error('Номер площадки вне ёмкости кода');
+    const a = Math.floor(num / Math.pow(BASE36, 3));
+    const b = Math.floor(num / Math.pow(BASE36, 2)) % BASE36;
+    const c = Math.floor(num / BASE36) % BASE36;
+    return a < 5 && MONTH_CODES.includes(ALNUM36[b]) && WEEKDAY_CODES.includes(ALNUM36[c]);
+  }
 
   // Справочники кодов (config/producers.json и config/companies.json на сервере).
   // В браузере заполняются через loadCodes() (GET /api/codes); в Node/тестах —
@@ -78,6 +77,11 @@
       companies: Object.fromEntries(Object.entries(codes?.companies || {})
         .map(([k, v]) => [norm(k), String(v).toUpperCase()])),
     };
+    const ports = codes?.ports;
+    if (ports && Object.keys(ports).length) {
+      PORT_CODES = Object.fromEntries(Object.entries(ports)
+        .map(([k, v]) => [norm(k), String(v).toUpperCase()]));
+    }
     return CODES;
   }
 
@@ -189,11 +193,10 @@
   }
 
   function portCode(port) {
-    const key = norm(port).replace(/[^A-Z0-9]/g, '_');
+    // Нормализация как в Python: регистр/пробелы/разделители не значимы (TN-A == TN_A)
+    const key = norm(port).replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     if (PORT_CODES[key]) return PORT_CODES[key];
-    const compact = key.replace(/_/g, '');
-    if (PORT_CODES[compact]) return PORT_CODES[compact];
-    throw new Error(`Неизвестный порт: "${port}". Допустимые значения — из справочника config/ports.json (по умолчанию TN_A, TN_B, TN_C).`);
+    throw new Error(`Неизвестный порт: "${port}". Допустимые значения — из справочника config/ports.json.`);
   }
 
   function siteCode(site) {
@@ -203,6 +206,9 @@
     const num = Number(s);
     if (!Number.isSafeInteger(num) || num < 0 || num > SITE_MAX) {
       throw new Error(`Номер площадки вне диапазона 0..${SITE_MAX}: "${site}"`);
+    }
+    if (isSiteAmbiguous(num)) {
+      throw new Error(`Номер площадки ${num} зарезервирован (код совпадает с шаблоном сегмента даты) — выберите соседнее значение`);
     }
     return toBase36(num, SITE_LEN);                   // 4 символа: 6 -> '2228', 42 -> '223A'
   }
@@ -319,11 +325,18 @@
   async function verifyChecksum(rawId, secret = null) {
     const compact = normalizeId(rawId);
     if (compact.length !== TOTAL_LEN) return false;
-    if ([...compact].some((ch) => !ALNUM36.includes(ch))) return false;
+    // Площадка/хеш/CRC — compact-алфавит:
+    if ([...compact.slice(8)].some((ch) => !ALNUM36.includes(ch))) return false;
+    // Читаемые глазом сегменты (производитель/дата/компания/порт) — base31:
+    if (!ALPHABET.includes(compact[0]) || !ALPHABET.includes(compact[1])) return false;
     if (!'23456'.includes(compact[2])) return false;                 // неделя в месяце 1..5
     if (!MONTH_CODES.includes(compact[3])) return false;             // месяц
     if (!WEEKDAY_CODES.includes(compact[4])) return false;           // день недели
-    if (!'ABC'.includes(compact[7])) return false;                   // порт TN_A/TN_B/TN_C
+    if (!ALPHABET.includes(compact[5]) || !ALPHABET.includes(compact[6])) return false; // компания
+    if (!Object.values(PORT_CODES).includes(compact[7])) return false; // порт из ports.json
+    try {                                                            // площадка вне двусмысленных
+      if (isSiteAmbiguous(decodeSite(compact.slice(8, PREFIX_TOTAL)))) return false;
+    } catch (e) { return false; }
     const body = compact.slice(0, BODY_LEN), check = compact.slice(BODY_LEN);
     return (await checksum(body, secret)) === check;
   }

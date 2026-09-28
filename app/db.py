@@ -40,11 +40,42 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE ids ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
 
+_INIT_DONE: dict[str, str] = {}
+
+
+def _ensure_schema(conn: sqlite3.Connection, path: str) -> None:
+    """Создаёт таблицу при первом обращении и при восстановлении удалённого ids.db.
+
+    Файл БД проверяется по inode (а не только по имени): sqlite-соединение
+    продолжает писать в старый удалённый дескриптор, поэтому простого
+    exists() недостаточно.
+    """
+    import os
+    try:
+        stat = os.stat(path)
+        key = f"{stat.st_dev}:{stat.st_ino}"
+    except FileNotFoundError:
+        key = "missing"
+    if _INIT_DONE.get(path) == key:
+        return
+    conn.executescript(SCHEMA)   # CREATE TABLE IF NOT EXISTS — безопасно
+    _migrate(conn)
+    try:
+        stat = os.stat(path)
+        _INIT_DONE[path] = f"{stat.st_dev}:{stat.st_ino}"
+    except FileNotFoundError:
+        _INIT_DONE.pop(path, None)
+
+
 @contextmanager
 def get_conn(db_path: Path | str = DB_PATH):
-    conn = sqlite3.connect(str(db_path))
+    """Открытое соединение; схема создаётся автоматически (ленивая инициализация),
+    поэтому приложение работает даже если кто-то удалил файл ids.db на ходу."""
+    path = str(db_path)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
+        _ensure_schema(conn, path)
         yield conn
         conn.commit()
     finally:
