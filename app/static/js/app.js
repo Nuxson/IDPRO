@@ -43,7 +43,9 @@ $('#genForm').addEventListener('submit', async (e) => {
         badge = '<span class="badge b-ok">рассчитан локально (офлайн, без записи в базу)</span>';
       } else throw serverErr;
     }
+    const short = rec.short || (rec.compact ? [rec.compact.slice(0,5), rec.compact.slice(5,7), rec.compact.slice(7,8), rec.compact.slice(8,9)].join('-') : '');
     box.innerHTML = `<div class="id-big">${esc(rec.id)}</div>
+      <div style="text-align:center;font-size:1.05rem;color:var(--accent);letter-spacing:2px;margin-top:4px">${esc(short)}</div>
       <div style="text-align:center;margin-top:6px">${badge}</div>
       <div class="hint" style="text-align:center">Каноническая строка: ${esc(rec.canonical)}</div>`;
   } catch (err) {
@@ -73,6 +75,8 @@ $('#verForm').addEventListener('submit', async (e) => {
           <tr><th>Место</th><td>${esc(r.location)}</td></tr>
           <tr><th>Компания</th><td>${esc(r.company)}</td></tr>
           <tr><th>Серийный №</th><td>${esc(r.serial)}</td></tr>
+          <tr><th>Порт</th><td>${esc(r.port)}</td></tr>
+          <tr><th>Площадка №</th><td>${esc(r.site)}</td></tr>
           <tr><th>Выдан</th><td>${esc(r.created_at)} UTC</td></tr></table>`;
       } else if (res.checksum_valid && !res.found_in_db) {
         html += `<span class="err">Формат корректен, но в базе такой код отсутствует.</span>`;
@@ -86,10 +90,13 @@ $('#verForm').addEventListener('submit', async (e) => {
         html += `Контрольный код (офлайн, без базы): <span class="badge ${ok ? 'b-ok' : 'b-err'}">${ok ? '✔ верен' : '✘ не верен'}</span><br>`;
         if (ok) {
           const p = IdGen.extractParts(id);
+          const dd = p.date_decoded;
           html += `<table>
-            <tr><th>Префикс производителя</th><td>${esc(p.producer_prefix)}</td></tr>
-            <tr><th>Префикс компании</th><td>${esc(p.company_prefix)}</td></tr>
-            <tr><th>Префикс места</th><td>${esc(p.location_prefix)}</td></tr>
+            <tr><th>Код производителя</th><td>${esc(p.producer_prefix)}</td></tr>
+            <tr><th>Дата (читается из кода)</th><td>${dd ? esc(`неделя ${dd.week_in_month}, ${dd.month_name.toLowerCase()}, ${dd.weekday_name}`) : '—'}</td></tr>
+            <tr><th>Сокращение компании</th><td>${esc(p.company_abbr)}</td></tr>
+            <tr><th>Порт</th><td>${esc(p.port_name || p.port)}</td></tr>
+            <tr><th>Площадка</th><td>${esc(p.site_number != null ? '№' + p.site_number : '—')}</td></tr>
             <tr><th>Хеш-часть</th><td>${esc(p.hash)}</td></tr>
             <tr><th>Контрольный код</th><td>${esc(p.checksum)}</td></tr></table>`;
           html += `<div class="hint">Сервер недоступен — наличие кода во внутренней базе не проверено.</div>`;
@@ -109,8 +116,8 @@ async function loadList() {
   try {
     const rows = await api('/api/list?limit=15');
     $('#list').innerHTML = rows.length
-      ? `<table><tr><th>ID</th><th>Серийный №</th><th>Компания</th></tr>` +
-        rows.map((r) => `<tr><td style="font-family:Consolas,monospace">${esc(r.id)}</td><td>${esc(r.serial)}</td><td>${esc(r.company)}</td></tr>`).join('') +
+      ? `<table><tr><th>ID</th><th>Серийный №</th><th>Порт/площадка</th><th>Компания</th></tr>` +
+        rows.map((r) => `<tr><td style="font-family:Consolas,monospace">${esc(r.id)}</td><td>${esc(r.serial)}</td><td>${esc((r.port||'') + (r.site ? ' / ' + r.site : ''))}</td><td>${esc(r.company)}</td></tr>`).join('') +
         `</table>`
       : '<em style="color:#64748b">база пуста</em>';
   } catch (e) { /* сервер недоступен — тихо пропускаем */ }
