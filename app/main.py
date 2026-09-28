@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 
 from . import db
 from .codes import CodesError, ensure_configs, load_codes as load_codes_raw, registry, save_codes
-from .idgen import extract_parts, make_id, suggest_code, verify_checksum
+from .idgen import (extract_parts, make_id, suggest_code, suggest_port,
+                    verify_checksum)
 
 app = FastAPI(title="Unique ID Generator", version="1.0")
 
@@ -104,18 +105,22 @@ def list_records(limit: int = Query(100, ge=1, le=1000)):
 
 # ---------- Справочники кодов (JSON-конфиги) ----------
 
-def _validate_codes(codes: dict[str, str]) -> dict[str, str]:
-    """Проверяет и нормализует пары {название: код}; возвращает готовые к записи."""
+def _validate_codes(codes: dict[str, str], kind: str = "producers") -> dict[str, str]:
+    """Проверяет и нормализует пары {название: код}; возвращает готовые к записи.
+
+    Для kind="ports" код — ровно 1 символ алфавита, иначе — ровно 2.
+    """
     from .codes import ALPHABET as A
+    need = 1 if kind == "ports" else 2
     out: dict[str, str] = {}
     for name, code in codes.items():
         name = " ".join(str(name).split())
         code = str(code).strip().upper()
         if not name:
             raise HTTPException(400, "Пустое название в справочнике")
-        if len(code) != 2 or any(ch not in A for ch in code):
+        if len(code) != need or any(ch not in A for ch in code):
             raise HTTPException(
-                400, f"Код {code!r} для «{name}» некорректен: нужно ровно 2 символа "
+                400, f"Код {code!r} для «{name}» некорректен: нужно ровно {need} симв. "
                      f"из алфавита {A} (без неоднозначных 0/O, 1/I/L)")
         out[name] = code
     return out
@@ -123,20 +128,26 @@ def _validate_codes(codes: dict[str, str]) -> dict[str, str]:
 
 @app.get("/api/codes")
 def get_codes():
-    """Текущее содержимое обоих справочников."""
+    """Текущее содержимое всех трёх справочников (поровый — без ошибок файла)."""
     registry.reload()
-    return {"producers": registry.producers, "companies": registry.companies}
+    try:
+        ports = registry.ports
+    except CodesError:
+        ports = {"TN_A": "A", "TN_B": "B", "TN_C": "C"}
+    return {"producers": registry.producers, "companies": registry.companies,
+            "ports": ports}
 
 
 @app.post("/api/codes/{kind}/add")
 def add_codes(kind: str, data: CodesInput):
-    """Добавляет/обновляет записи в справочнике. kind: producers | companies."""
-    path = registry.producers_path if kind == "producers" else (
-        registry.companies_path if kind == "companies" else None)
+    """Добавляет/обновляет записи в справочнике. kind: producers | companies | ports."""
+    path = {"producers": registry.producers_path,
+            "companies": registry.companies_path,
+            "ports": registry.ports_path}.get(kind)
     if path is None:
-        raise HTTPException(404, "kind должен быть producers или companies")
-    added = _validate_codes(data.codes)
-    current = dict(load_codes_raw(path))
+        raise HTTPException(404, "kind должен быть producers, companies или ports")
+    added = _validate_codes(data.codes, kind)
+    current = dict(load_codes_raw(path, 1 if kind == "ports" else 2))
     current.update(added)
     save_codes(path, current)
     registry.reload()
@@ -152,8 +163,19 @@ def generate_codes(data: CodesInput):
     Возвращает готовые пары {название: код} (в файл НЕ пишет — их можно
     отправить через /api/codes/{kind}/add).
     """
-    result = {name.strip(): suggest_code(name) for name in data.codes if name.strip()}
+    result = {}
+    for name in data.codes:
+        name = name.strip()
+        if not name:
+            continue
+        result[name] = suggest_port(name) if kind_hint_ports(data) else suggest_code(name)
     return {"generated": result}
+
+
+def kind_hint_ports(data: "CodesInput") -> bool:
+    """Если все ключи похожи на порты (TN_*) — генерируем односимвольные коды."""
+    keys = [k.strip().upper() for k in data.codes if k.strip()]
+    return bool(keys) and all(k.startswith("TN_") or k.startswith("PORT_") for k in keys)
 
 
 @app.get("/")

@@ -20,8 +20,9 @@ import argparse
 import sys
 
 from app import db
-from app.codes import ensure_configs
-from app.idgen import extract_parts, make_id, verify_checksum
+from app import codes as codes_mod
+from app.codes import CodesError, ensure_configs, load_codes, save_codes
+from app.idgen import extract_parts, make_id, suggest_code, verify_checksum
 
 
 def cmd_codes_init(args):
@@ -32,7 +33,21 @@ def cmd_codes_init(args):
         print("Справочники созданы (существующие не тронуты):")
     for name, path in files.items():
         print(f"  {name}: {path}")
-    print("Заполните их своими названиями и кодами (2 символа из алфавита base31).")
+    print("Заполните их своими названиями и кодами (2 символа; для портов — 1 символ).")
+    return 0
+
+
+def cmd_codes_add(args):
+    """Добавляет запись в справочник; без --code программа сама предложит код."""
+    files = {"producers": codes_mod.PRODUCERS_FILE,
+             "companies": codes_mod.COMPANIES_FILE,
+             "ports": codes_mod.PORTS_FILE}
+    path = files[args.kind]
+    code = args.code.upper() if args.code else suggest_code(args.name)
+    existing = load_codes(path) if path.exists() else {}
+    existing[args.name] = code
+    save_codes(path, existing)
+    print(f"{args.kind}: «{args.name}» -> {code} ({path})")
     return 0
 
 
@@ -83,6 +98,12 @@ def build_parser():
     ci.add_argument("--force", action="store_true", help="Перезаписать существующие шаблонами")
     ci.set_defaults(func=cmd_codes_init)
 
+    ca = sub.add_parser("codes-add", help="Добавить запись в справочник (код можно не указывать — сгенерируется)")
+    ca.add_argument("kind", choices=["producers", "companies", "ports"])
+    ca.add_argument("name")
+    ca.add_argument("--code", help="2 символа из алфавита base31 (для ports — 1 символ); по умолчанию — автоподбор")
+    ca.set_defaults(func=cmd_codes_add)
+
     def add_gen(sp):
         sp.add_argument("--producer", required=True, help="Производитель")
         sp.add_argument("--location", required=True, help="Место положения")
@@ -106,6 +127,6 @@ if __name__ == "__main__":
     args = build_parser().parse_args()
     try:
         sys.exit(args.func(args) or 0)
-    except ValueError as e:
+    except (ValueError, CodesError) as e:
         print(f"Ошибка: {e}", file=sys.stderr)
         sys.exit(2)
