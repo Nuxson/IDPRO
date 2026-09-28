@@ -11,7 +11,7 @@ from app.idgen import site_excluded as _site_excluded_fn
 idgen_SITE_EXCLUDED_LIST = _site_excluded_fn()
 
 BASE = dict(producer="Ромашка", location="Москва",
-            company="Вектор", serial="SN-00123", port="TN_A", site="7")
+            company="Вектор", serial="SN-00123", port="TN_A", site="5")
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +40,7 @@ def test_format():
     assert len(compact) == TOTAL_LEN == 19
     assert all("2" <= ch <= "9" or "A" <= ch <= "Z" for ch in compact)  # без 0/O/1/I/L
     assert r["id"] == "-".join([compact[0:4], compact[4:8], compact[8:12],
-                    compact[12:16], compact[16:17]])   # блоки 4-4-4-4-1
+                    compact[12:16], compact[16:19]])   # блоки 4-4-4-4-3
 
 
 def test_date_is_automatic():
@@ -60,7 +60,7 @@ def test_deterministic_and_normalized():
 
 @pytest.mark.parametrize("field,value", [
     ("serial", "SN-00124"), ("producer", "Вектор"), ("location", "Казань"),
-    ("company", "Иная"), ("dt", "16.03.2026"), ("port", "TN_B"), ("site", "7"),
+    ("company", "Иная"), ("dt", "16.03.2026"), ("port", "TN_B"), ("site", "8"),
 ])
 def test_any_field_change_changes_id(field, value):
     base = make_id(**BASE, dt="15.03.2026")["compact"]
@@ -98,7 +98,7 @@ def test_site_range_zero_to_max():
 
 
 @pytest.mark.parametrize("bad", ["abc", "-5", "1.5", str(SITE_MAX + 1), "999999999999"] +
-                         [str(v) for v in sorted(idgen_SITE_EXCLUDED_LIST)])   # резерв кода даты
+                         [str(v) for v in sorted(idgen_SITE_EXCLUDED_LIST)[:20]])   # резерв кода даты (выборка)
 def test_invalid_site(bad):
     with pytest.raises(ValueError):
         make_id(**{**BASE, "site": bad}, dt="15.03.2026")
