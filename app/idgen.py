@@ -54,7 +54,18 @@ PREFIX_LEN = 9                                            # PP + DWC + CC + по
 BODY_LEN = PREFIX_LEN + HASH_LEN                          # 15
 TOTAL_LEN = BODY_LEN + CHECK_LEN                          # 17
 
-_NON_ALNUM = re.compile(r"[^A-Z0-9]")
+# Читаемые коды производителей по умолчанию (расширяются без смены формата).
+PRODUCER_ALIASES = {
+    "ERICSSON": "ER", "NOKIA": "NO", "SIEMENS": "SI", "HUAWEI": "HW",
+    "SAMSUNG": "SA", "ROBOTECH": "RQ",
+}
+
+# Читаемые сокращения компаний по инициалам слов: MASHTAB-SVYAZ -> MS.
+COMPANY_ALIASES = {
+    "МАСШТАБ-СВЯЗЬ": "MS",
+    "MASHTAB-SVYAZ": "MS", "MASHATAB-SVYAZ": "MS",
+}
+
 
 _TMAP = {
     "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "E",
@@ -65,29 +76,35 @@ _TMAP = {
 }
 
 
-# Читаемые коды производителей по умолчанию (расширяются без смены формата).
-PRODUCER_ALIASES = {
-    "ERICSSON": "ER", "NOKIA": "NO", "SIEMENS": "SI", "HUAWEI": "HW",
-    "SAMSUNG": "SA", "ROBOTECH": "RQ",
-}
-
-# Читаемые сокращения компаний по инициалам слов: MASHTAB-SVYAZ -> MS.
-COMPANY_ALIASES = {
-    "MASHTAB-SVYAZ": "MS", "MASHATAB-SVYAZ": "MS",
-}
-
-
-def _norm(value: str) -> str:
-    """Нормализация строки: транслит, trim, верхний регистр, схлопывание пробелов."""
-    return " ".join(_translit((value or "").strip().upper()).split())
-
-
 def _translit(text: str) -> str:
     return "".join(_TMAP.get(ch, ch) for ch in text)
 
 
+def _readable(text: str) -> str:
+    """Транслитерирует кириллицу в латиницу и оставляет только символы алфавита base31.
+
+    Эрикссон -> ERICCCOH -> 'ER'; Nokia -> NOKIA -> 'NK' (O вырезается как неоднозначная).
+    Так код производителя всегда читается и при этом проходит офлайн-валидацию ID.
+    """
+    t = _translit(text.upper())
+    return "".join(ch for ch in t if ch in ALPHABET)
+
+
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def _norm(value: str) -> str:
+    """Нормализация строки: trim, верхний регистр, схлопывание пробелов.
+
+    Транслит кириллицы в латиницу НЕ применяется к канонической строке —
+    иначе «Москва» и «Moscow» дали бы один ID при разных исходных данных.
+    Для читаемых кодов производителя/компании используется _readable().
+    """
+    return " ".join((value or "").strip().upper().split())
+
+
 def producer_code(name: str) -> str:
-    """Читаемый код производителя: первые 2 буквы транслита (Ericsson -> ER).
+    """Читаемый код производителя: первые 2 буквы транслита (Ericsson -> ER, Эрикссон -> ER).
 
     Приоритет: словарь PRODUCER_ALIASES → первые 2 допустимые буквы транслита →
     детерминированный 2-символьный код из base31 (стабилен для одного имени).
@@ -95,8 +112,8 @@ def producer_code(name: str) -> str:
     n = _norm(name)
     if n in PRODUCER_ALIASES:
         return PRODUCER_ALIASES[n]
-    letters = _NON_ALNUM.sub("", _translit(n))
-    if len(letters) >= 2 and all(ch in ALPHABET for ch in letters[:2]):
+    letters = _readable(n)
+    if len(letters) >= 2:
         return letters[:2]
     digest = hashlib.sha256(("v3p:" + n).encode()).digest()
     return to_base31(int.from_bytes(digest[:4], "big"), 2)
@@ -111,10 +128,17 @@ def company_abbr(name: str) -> str:
     n = _norm(name)
     if n in COMPANY_ALIASES:
         return COMPANY_ALIASES[n]
-    words = re.split(r"[\s\-]+", _translit(n))
-    initials = "".join(w[0] for w in words if w)
-    cleaned = "".join(ch if ch in ALPHABET else "Q" for ch in initials)[:2]
-    return cleaned.ljust(2, "Q")
+    # Транслит всей строки, инициалы слов (первые буквы), затем только символы base31.
+    # Масштаб-Связь -> MASHTAB-SVYAZ -> MS; ИнвестГрупп -> InvestGroup -> 'V' + добор 'Q'.
+    # Инициалы слов транслитированного названия: МАСШТАБ-СВЯЗЬ -> MASHTAB-SVYAZ -> MS.
+    tr = _translit(n)
+    words = [w for w in re.split(r"[\s\-]+", tr) if w]
+    initials = "".join(w[0] for w in words)
+    readable = "".join(ch for ch in initials if ch in ALPHABET)
+    if len(readable) < 2:
+        extra = [ch for ch in _readable(n) if ch not in readable]
+        readable += "".join(extra)
+    return readable[:2].ljust(2, "Q")
 
 
 def port_code(port: str) -> str:
@@ -129,21 +153,29 @@ def port_code(port: str) -> str:
 
 
 def site_code(site: str) -> str:
-    """Код номера площадки из алфавита base31: 1->'2', 9->'A', 14->'J'; диапазон 1..14."""
+    """Код номера площадки: цифры читаются в ID напрямую (5 -> '5', 7 -> '7').
+
+    Двухзначные номера кодируются по модулю алфавита base31 (14 -> 'E'),
+    чтобы все символы ID оставались в допустимом алфавите. Диапазон 1..99.
+    """
     s = _norm(site).replace(" ", "")
     s = re.sub(r"^(НОМЕР|NOMER|NO|#)", "", s) or s
     try:
         num = int(s)
     except ValueError:
-        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается число 1..{len(SITE_CODES)})")
-    if not 1 <= num <= len(SITE_CODES):
-        raise ValueError(f"Номер площадки вне диапазона 1..{len(SITE_CODES)}: {site!r}")
-    return SITE_CODES[num - 1]
+        raise ValueError(f"Некорректный номер площадки: {site!r} (ожидается число 1..99)")
+    if not 1 <= num <= 99:
+        raise ValueError(f"Номер площадки вне диапазона 1..99: {site!r}")
+    return ALPHABET[(num - 1) % BASE]
 
 
 def decode_site(code: str) -> int:
-    """Обратный разбор кода площадки ('B' -> 10)."""
-    return SITE_CODES.index(code.upper()) + 1
+    """Приблизительный обратный разбор кода площадки ('5' -> 5, 'E' -> 14/45/76).
+
+    Точный номер восстанавливается только по внутренней базе (по хеш-части);
+    для однозначных номеров код читается напрямую.
+    """
+    return ALPHABET.index(code.upper()) + 1
 
 
 def week_symbol(week_in_month: int) -> str:

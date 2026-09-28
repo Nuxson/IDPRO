@@ -12,18 +12,32 @@ DB_PATH = Path(__file__).resolve().parent.parent / "ids.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ids (
-    id          TEXT PRIMARY KEY,      -- сформированный код XXXX-XXXX-XXXX-CCKK
+    id          TEXT PRIMARY KEY,      -- сформированный код формата v3 (XXXX-XXXX-...)
     compact     TEXT UNIQUE,           -- код без разделителей
     producer    TEXT NOT NULL,
     date        TEXT NOT NULL,         -- ISO YYYY-MM-DD
     location    TEXT NOT NULL,
     company     TEXT NOT NULL,
     serial      TEXT NOT NULL,
+    port        TEXT NOT NULL,         -- TN_A / TN_B / TN_C
+    site        TEXT NOT NULL,         -- номер площадки (1..99)
     canonical   TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (producer, date, location, company, serial)
+    UNIQUE (producer, date, location, company, serial, port, site)
 );
 """
+
+_PORT_COLS = ("port", "site")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Добавляет колонки port/site в БД старого (v1) формата."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(ids)")}
+    if not cols:
+        return
+    for col in _PORT_COLS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE ids ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
 
 @contextmanager
@@ -40,25 +54,30 @@ def get_conn(db_path: Path | str = DB_PATH):
 def init_db(db_path: Path | str = DB_PATH) -> None:
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 def register(producer: str, dt: str, location: str, company: str, serial: str,
-             secret: str | None = None, db_path: Path | str = DB_PATH) -> dict:
+             port: str, site: str, secret: str | None = None,
+             db_path: Path | str = DB_PATH) -> dict:
     """Генерирует ID и сохраняет в базу. Повторная регистрация тех же данных вернёт существующий ID."""
-    rec = make_id(producer, dt, location, company, serial, secret)
+    rec = make_id(producer, dt, location, company, serial, port, site, secret)
     f = rec["fields"]
+    uniq = (f["producer"], f["date"], f["location"], f["company"], f["serial"], f["port"], f["site"])
     with get_conn(db_path) as conn:
+        _migrate(conn)  # совместимость со старыми БД (v1 без port/site)
         cur = conn.execute(
-            """INSERT INTO ids (id, compact, producer, date, location, company, serial, canonical)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT (producer, date, location, company, serial) DO NOTHING""",
+            """INSERT INTO ids (id, compact, producer, date, location, company, serial, port, site, canonical)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT (producer, date, location, company, serial, port, site) DO NOTHING""",
             (rec["id"], rec["compact"], f["producer"], f["date"], f["location"],
-             f["company"], f["serial"], rec["canonical"]),
+             f["company"], f["serial"], f["port"], f["site"], rec["canonical"]),
         )
         if cur.rowcount == 0:  # такая запись уже есть — возвращаем её
             row = conn.execute(
-                "SELECT * FROM ids WHERE producer=? AND date=? AND location=? AND company=? AND serial=?",
-                (f["producer"], f["date"], f["location"], f["company"], f["serial"]),
+                """SELECT * FROM ids WHERE producer=? AND date=? AND location=?
+                   AND company=? AND serial=? AND port=? AND site=?""",
+                uniq,
             ).fetchone()
             return {"record": dict(row), "created": False}
         row = conn.execute("SELECT * FROM ids WHERE compact=?", (rec["compact"],)).fetchone()
