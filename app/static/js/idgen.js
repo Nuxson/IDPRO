@@ -56,38 +56,45 @@
   // Чистый JS SHA-256 (используется только если недоступен WebCrypto)
   function _sha256Pure(msg) {
     const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+    // Канонические константы раундов SHA-256 (FIPS 180-4, 4.2.2) — ровно 64 значения
     const kk = [
       0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
       0xd807aa98, 0x12835b01, 0x243185be, 0x2341b538, 0x5948720c, 0x1fc649a3, 0x5d5ab729, 0x6bca5e90,
-      0x748f82ee, 0x78de5eee, 0x84c87814, 0x9ccdb0a3, 0xa2bff8d1, 0xaebf8657, 0xc5ef0bfe, 0xd69be1c9,
-      0xfee6b3df, 0x0f4d50e6, 0x10dbacd, 0x19a4c116, 0x1e376c69, 0x2748774d, 0x2885dec7, 0x391c0cb3,
-      0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90bef3ba,
-      0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+      0x748f82ee, 0x78de5aee, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+      0xca273ece, 0xd186b8c7, 0xeada7dd6, 0xf57d1f7e, 0x4787c62a, 0xa8304613, 0xfd469501, 0x69b97c4e,
+      0x05ca0eff, 0x78a5636f, 0x06f067aa, 0x0a637dc5, 0x113f9804, 0x1b710b35, 0x28db77f5, 0x32caab7b,
+      0x3c9ebe0a, 0x431d67c4, 0x4cc5d4be, 0x597f299c, 0x5fcf6f48, 0x685872fa, 0x7ce6ec0e, 0x84b82f4f,
+      0x9be30aaf, 0xa4c68d65, 0xbc94a3fc, 0xdd5b7b51, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138,
+      0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c3d, 0xa2bfe8a1, 0xa81a664b,
     ];
+    if (kk.length !== 64) throw new Error('KK table must contain 64 constants');
     let h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
     const len = msg.length;
-    const withPad = new Uint8Array((((len + 8) >> 6) + 1) * 64);
+    // Длина буфера с дополнением: ceil((len + 9) / 64) * 64 (байт 0x80 + 8 байт длины в битах)
+    const total = ((((len + 8) >> 6) + 1) << 6);
+    const withPad = new Uint8Array(total);
     withPad.set(msg); withPad[len] = 0x80;
+    // 64-битная длина сообщения в битах, big-endian (BigInt — без потери точности)
     const bits = BigInt(len) * 8n;
-    for (let i = 0; i < 8; i++) withPad[withPad.length - 1 - i] = Number((bits >> BigInt(8 * i)) & 0xffn);
+    for (let i = 0; i < 8; i++) withPad[total - 1 - i] = Number((bits >> BigInt(8 * i)) & 0xffn);
     const w = new Uint32Array(64);
-    for (let off = 0; off < withPad.length; off += 64) {
+    for (let off = 0; off < total; off += 64) {
       for (let i = 0; i < 16; i++) {
-        w[i] = (withPad[off + i * 4] << 24) | (withPad[off + i * 4 + 1] << 16) |
-               (withPad[off + i * 4 + 2] << 8) | withPad[off + i * 4 + 3];
+        w[i] = ((withPad[off + i * 4] << 24) | (withPad[off + i * 4 + 1] << 16) |
+               (withPad[off + i * 4 + 2] << 8) | withPad[off + i * 4 + 3]) >>> 0;
       }
       for (let i = 16; i < 64; i++) {
-        const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
-        const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        const s0 = (rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3)) >>> 0;
+        const s1 = (rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10)) >>> 0;
         w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
       }
       let [a, b, c, d, e, f, g, hh] = h;
       for (let i = 0; i < 64; i++) {
-        const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-        const ch = (e & f) ^ (~e & g);
+        const S1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
+        const ch = ((e & f) ^ (~e & g)) >>> 0;
         const t1 = (hh + S1 + ch + kk[i] + w[i]) >>> 0;
-        const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-        const maj = (a & b) ^ (a & c) ^ (b & c);
+        const S0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
+        const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
         const t2 = (S0 + maj) >>> 0;
         hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
       }
