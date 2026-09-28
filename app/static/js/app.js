@@ -23,6 +23,7 @@ async function api(path, opts) {
 $('#genForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fields = Object.fromEntries(new FormData(e.target));
+  delete fields.date;   // дата не вводится: фиксируется сервером автоматически (сегодня)
   const box = $('#genResult');
   box.style.display = 'block';
   box.textContent = '…';
@@ -43,7 +44,7 @@ $('#genForm').addEventListener('submit', async (e) => {
         badge = '<span class="badge b-ok">рассчитан локально (офлайн, без записи в базу)</span>';
       } else throw serverErr;
     }
-    const short = rec.short || (rec.compact ? [rec.compact.slice(0,5), rec.compact.slice(5,7), rec.compact.slice(7,8), rec.compact.slice(8,9)].join('-') : '');
+    const short = rec.short || (rec.compact ? [rec.compact.slice(0,5), rec.compact.slice(5,7), rec.compact.slice(7,8), String(IdGen.extractParts(rec.compact).site_number)].join('-') : '');
     box.innerHTML = `<div class="id-big">${esc(rec.id)}</div>
       <div style="text-align:center;font-size:1.05rem;color:var(--accent);letter-spacing:2px;margin-top:4px">${esc(short)}</div>
       <div style="text-align:center;margin-top:6px">${badge}</div>

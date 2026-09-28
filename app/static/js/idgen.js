@@ -2,20 +2,22 @@
  * idgen.js — JS-порт ядра генерации уникальных ID (работает в браузере и Node.js).
  *
  * Полностью совместим с Python-версией app/idgen.py: те же входные данные → тот же код.
- * Формат ID v3: PP DWC CC порт площадка + хеш(6) + CRC(2), блоки по 4 символа.
+ * Формат ID v4: PP DWC CC порт площадка(5) + хеш(6) + CRC(2), блоки по 4 символа.
  *
  * Состав компактного кода:
- *   [0:2]  PP   — код производителя (транслит; Ericsson/Эрикссон -> ER)
- *   [2:5]  DWC  — дата: D = неделя в месяце (дни 1-7 = 1 ...), W = месяц (B=Январь..Q=Декабрь),
- *                C = день недели (A=Понедельник..F=Пятница, G=Воскресенье)
- *   [5:7]  CC   — сокращение компании по инициалам слов (Масштаб-Связь -> MS)
- *   [7]    S    — порт: TN_A -> A, TN_B -> B, TN_C -> C
- *   [8]    S    — номер площадки (base31: 1->'2', ..., 9->'A')
- *   [9:15]      — хеш SHA-256 от канонической строки v3 (место + серийный и др.)
- *   [15:17]     — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
+ *   [0:2]  PP     — код производителя (транслит; Ericsson/Эрикссон -> ER)
+ *   [2:5]  DWC    — дата: D = неделя в месяце (дни 1-7 = 1 ...), W = месяц (B=Январь..Q=Декабрь),
+ *                  C = день недели (A=Понедельник..F=Пятница, G=Воскресенье).
+ *                  Дата НЕ вводится пользователем: фиксируется автоматически (сегодня)
+ *                  при генерации и хранится во внутренней базе.
+ *   [5:7]  CC     — сокращение компании по инициалам слов (Масштаб-Связь -> MS)
+ *   [7]    S      — порт: TN_A -> A, TN_B -> B, TN_C -> C
+ *   [8:13] SSSSS  — номер площадки base31, ровно 5 символов (0..99999): 6 -> '22228'
+ *   [13:19]       — хеш SHA-256 от канонической строки v4 (место + серийный и др.)
+ *   [19:21]       — контрольный код HMAC-SHA256 (аналог CRC у серийных номеров / IMEI)
  *
  * Использование (браузер):
- *   const res = await IdGen.makeId({ producer:'Ericsson', date:'07:08:2026',
+ *   const res = await IdGen.makeId({ producer:'Ericsson',
  *       location:'Москва', company:'Масштаб-Связь', serial:'SN-00123', port:'TN_A', site:'6' });
  *   const ok  = await IdGen.verifyChecksum(res.id);
  */
@@ -35,13 +37,12 @@
   const BLOCK = 4;
   const CHECK_LEN = 2;
   const HASH_LEN = 6;
-  const PREFIX_LEN = 2;
-  const PREFIX_TOTAL = 9;                             // PP + DWC + CC + порт + площадка
-  const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 15
-  const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 17
+  const SITE_LEN = 5;                                 // номер площадки: ровно 5 символов base31
+  const PREFIX_TOTAL = 2 + 3 + 2 + 1 + SITE_LEN;      // PP+DWC+CC+порт+площадка = 13
+  const BODY_LEN = PREFIX_TOTAL + HASH_LEN;           // 19
+  const TOTAL_LEN = BODY_LEN + CHECK_LEN;             // 21
 
   const MONTH_CODES = 'BCDEFGHJKLMNPQ';               // B=Январь ... Q=Декабрь
-  const SITE_CODES = '23456789ABCDEFGHJ';             // площадка: 1->'2', ..., 9->'A', 14->'J'
   const WEEKDAY_CODES = 'ABCDEFG';                    // A=Понедельник ... F=Пятница, G=Вс
   const PORT_CODES = { TN_A: 'A', TN_B: 'B', TN_C: 'C' };
   const PRODUCER_ALIASES = {
@@ -185,13 +186,21 @@
 
   function siteCode(site) {
     let s = norm(site).replace(/ /g, '');
-    s = s.replace(/^(\d+)$/, '$1');                     // 'НОМЕР6' -> '' -> fallback ниже не нужен для чистых чисел
-    s = s.replace(/^(НОМЕР|NOMER|NO|#)/, '');           // Python: re.sub(... ) or s
-    if (!s) throw new Error(`Некорректный номер площадки: "${site}" (ожидается число 1..99)`);
-    if (!/^\d+$/.test(s)) throw new Error(`Некорректный номер площадки: "${site}" (ожидается число 1..99)`);
+    s = s.replace(/^(НОМЕР|NOMER|NO|#)/, '') || s;   // как в Python: re.sub(...) or s
+    if (!/^\d+$/.test(s)) throw new Error(`Некорректный номер площадки: "${site}" (ожидается число 0..99999)`);
     const num = Number(s);
-    if (num < 1 || num > 99) throw new Error(`Номер площадки вне диапазона 1..99: "${site}"`);
-    return ALPHABET[(num - 1) % BASE];
+    if (num < 0 || num > 99999) throw new Error(`Номер площадки вне диапазона 0..99999: "${site}"`);
+    return toBase31(num, SITE_LEN);                   // ровно 5 символов: 6 -> '22228'
+  }
+
+  function decodeSite(code5) {                        // обратный разбор: '22228' -> 6
+    let n = 0n;
+    for (const ch of String(code5).toUpperCase()) {
+      const idx = ALPHABET.indexOf(ch);
+      if (idx < 0) throw new Error('Недопустимый символ кода площадки: ' + ch);
+      n = n * BigInt(BASE) + BigInt(idx);
+    }
+    return Number(n);
   }
 
   const weekOfMonth = (day) => Math.floor((day - 1) / 7) + 1;   // дни 1–7 = неделя 1
@@ -230,7 +239,7 @@
   }
 
   const canonicalString = (producer, isoDate, location, company, serial, port, site) =>
-    ['v3', producer, isoDate, location, company, serial, port, site].join('|');
+    ['v4', producer, isoDate, location, company, serial, port, site].join('|');
 
   // hexdigest[:16] из Python == первые 8 байт дайджеста, прочитанные как big-endian число
   function digestToBigint(digest, bytes) {
@@ -247,7 +256,9 @@
 
   // ---------- Публичный API ----------
   /**
-   * Генерирует уникальный ID из пяти полей. Детерминирован: те же данные → тот же код.
+   * Генерирует уникальный ID из полей. Детерминирован: те же данные → тот же код.
+   * Дата НЕ запрашивается: фиксируется автоматически (сегодня); параметр `date`
+   * — служебный (тесты/воспроизведение), в UI не передаётся.
    * @returns {Promise<{id:string, compact:string, canonical:string, fields:object}>}
    */
   async function makeId({ producer, date, location, company, serial, port, site }, secret = null) {
@@ -257,12 +268,13 @@
                      ['серийный номер', S], ['порт', PT], ['номер площадки', ST]]
       .filter(([, v]) => !v).map(([n]) => n);
     if (missing.length) throw new Error('Заполните поля: ' + missing.join(', '));
-    const iso = normDate(date);
+    const iso = date ? normDate(date) : localIsoToday();
 
     const digest = await sha256Bytes(new TextEncoder().encode(canonicalString(P, iso, L, C, S, PT, ST)));
     const hashPart = toBase31(digestToBigint(digest, 8), HASH_LEN);
 
-    const prefixPart = producerCode(P) + dateSegment(iso) + companyAbbr(C) + portCode(PT) + siteCode(ST);
+    const sitePart = siteCode(ST);
+    const prefixPart = producerCode(P) + dateSegment(iso) + companyAbbr(C) + portCode(PT) + sitePart;
     const body = prefixPart + hashPart;
     const full = body + await checksum(body, secret);
     const blocks = [];
@@ -271,7 +283,7 @@
     return {
       id: blocks.join(SEP),
       compact: full,
-      short: [prefixPart.slice(0, 5), prefixPart.slice(5, 7), prefixPart.slice(7, 8), prefixPart.slice(8, 9)].join(SEP),
+      short: [prefixPart.slice(0, 5), prefixPart.slice(5, 7), prefixPart.slice(7, 8), String(decodeSite(sitePart))].join(SEP),
       canonical: canonicalString(P, iso, L, C, S, PT, ST),
       date_segment: body.slice(2, 5),
       fields: { producer: P, date: iso, location: L, company: C, serial: S, port: PT, site: ST },
@@ -280,6 +292,12 @@
 
   const normalizeId = (raw) =>
     [...String(raw ?? '').replace(/[\s\-_]+/g, '').toUpperCase()].filter((ch) => ALPHABET.includes(ch)).join('');
+
+  // 'Сегодня' в локальном часовом поясе браузера (как date.today() в Python)
+  function localIsoToday() {
+    const t = new Date();
+    return `${String(t.getFullYear()).padStart(4, '0')}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+  }
 
   /** Офлайн-проверка контрольного кода ID без доступа к базе (аналог проверки IMEI). */
   async function verifyChecksum(rawId, secret = null) {
@@ -290,7 +308,6 @@
     if (!MONTH_CODES.includes(compact[3])) return false;             // месяц
     if (!WEEKDAY_CODES.includes(compact[4])) return false;           // день недели
     if (!'ABC'.includes(compact[7])) return false;                   // порт TN_A/TN_B/TN_C
-    if (!SITE_CODES.includes(compact[8])) return false;              // номер площадки
     const body = compact.slice(0, BODY_LEN), check = compact.slice(BODY_LEN);
     return (await checksum(body, secret)) === check;
   }
@@ -299,7 +316,7 @@
                        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
   const WEEKDAY_NAMES = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
 
-  /** Разбор ID на читаемые составляющие (формат v3). */
+  /** Разбор ID на читаемые составляющие (формат v4). */
   function extractParts(rawId) {
     const c = normalizeId(rawId);
     const parts = {
@@ -307,8 +324,8 @@
       date_segment: c.slice(2, 5),
       company_abbr: c.slice(5, 7),
       port: c.slice(7, 8),
-      site: c.slice(8, 9),
-      hash: c.slice(9, BODY_LEN),
+      site_code: c.slice(8, PREFIX_TOTAL),
+      hash: c.slice(PREFIX_TOTAL, BODY_LEN),
       checksum: c.slice(BODY_LEN),
     };
     if ('23456'.includes(parts.date_segment[0]) && MONTH_CODES.includes(parts.date_segment[1])
@@ -322,14 +339,15 @@
       };
     } else parts.date_decoded = null;
     parts.port_name = Object.keys(PORT_CODES).find((k) => PORT_CODES[k] === parts.port) || null;
-    parts.site_number = ALPHABET.indexOf(parts.site) + 1 || null;   // однозначные номера читаются напрямую
+    try { parts.site_number = decodeSite(parts.site_code); }
+    catch (e) { parts.site_number = null; }
     return parts;
   }
 
   return {
-    ALPHABET, TOTAL_LEN, BODY_LEN, MONTH_CODES, WEEKDAY_CODES, PORT_CODES,
+    ALPHABET, TOTAL_LEN, BODY_LEN, MONTH_CODES, WEEKDAY_CODES, PORT_CODES, SITE_LEN,
     makeId, verifyChecksum, normalizeId, extractParts, checksum,
-    canonicalString, toBase31, normDate,
-    producerCode, companyAbbr, portCode, siteCode, dateSegment,
+    canonicalString, toBase31, normDate, localIsoToday,
+    producerCode, companyAbbr, portCode, siteCode, decodeSite, dateSegment,
   };
 });

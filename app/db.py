@@ -57,11 +57,14 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
         _migrate(conn)
 
 
-def register(producer: str, dt: str, location: str, company: str, serial: str,
+def register(producer: str, location: str, company: str, serial: str,
              port: str, site: str, secret: str | None = None,
              db_path: Path | str = DB_PATH) -> dict:
-    """Генерирует ID и сохраняет в базу. Повторная регистрация тех же данных вернёт существующий ID."""
-    rec = make_id(producer, dt, location, company, serial, port, site, secret)
+    """Генерирует ID (дата фиксируется автоматически — сегодня) и сохраняет в базу.
+
+    Повторная регистрация тех же данных вернёт существующий ID (с его исходной датой).
+    """
+    rec = make_id(producer, location, company, serial, port, site, secret)
     f = rec["fields"]
     uniq = (f["producer"], f["date"], f["location"], f["company"], f["serial"], f["port"], f["site"])
     with get_conn(db_path) as conn:
