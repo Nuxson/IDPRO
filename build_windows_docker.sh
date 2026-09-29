@@ -21,8 +21,26 @@ cd "$(dirname "$0")"
 CLEAN_FLAG=""
 if [[ "${1:-}" == "--clean" ]]; then CLEAN_FLAG="--no-cache"; fi
 
-# 1. Собираем образ (кэшируется: повторные сборки идут с шага копирования кода)
-docker buildx build $CLEAN_FLAG -f Dockerfile.windows -t idpro-win-builder .
+# 0. Определяем движок сборки: docker c buildx -> podman -> plain docker build.
+#    На Manjaro часто стоит podman (alias docker=podman), у которого нет плагина
+#    buildx и который по-своему трактует некоторые флаги — поэтому подбираем
+#    рабочую команду автоматически.
+detect_engine() {
+  if command -v podman >/dev/null 2>&1; then
+    echo "podman build"
+  elif docker buildx version >/dev/null 2>&1; then
+    echo "docker buildx build"
+  else
+    echo "docker build"
+  fi
+}
+ENGINE=$(detect_engine)
+echo "движок сборки: $ENGINE"
+
+# 1. Собираем образ (кэшируется: повторные сборки идут с шага копирования кода).
+#    Dockerfile передаём через stdin (-f -): так команду принимают и docker,
+#    и podman, и старые версии без buildx.
+$ENGINE $CLEAN_FLAG -f - -t idpro-win-builder . < Dockerfile.windows
 
 # 2. Запускаем сборку внутри контейнера, результат — в ./dist-windows
 rm -rf dist-windows
