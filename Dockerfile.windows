@@ -1,15 +1,5 @@
 # ============================================================================
 # Docker-образ: Wine + Windows-Python + PyInstaller => IDPRO.exe на Linux-хосте
-#
-# Почему НЕ «wine python-3.12.x-amd64.exe /quiet»: бутстрапёр инсталлятора
-# CPython под Debian-Wine 6.0 падает с rc=123 (не хватает wine-gecko/mono,
-# comctl32 v6, winbind; в логе — пустой drive_c без Python312).
-# Вместо этого используется ОФИЦИАЛЬНЫЙ embeddable-архив CPython для Windows
-# (тот же самый интерпретатор python.org) + bootstrap pip через get-pip.py.
-# Никаких инсталляторов, никаких MSI — только распаковка zip. Детерминированно.
-#
-# Слои (кэшируются по порядку): apt+Wine -> wineprefix -> python+pip ->
-# -> зависимости сборки -> код проекта. Изменение кода не пересобирает всё выше.
 # ============================================================================
 FROM ubuntu:22.04
 
@@ -17,70 +7,64 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEDEBUG=-all \
     WINEPREFIX=/root/.wine \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
+    XDG_RUNTIME_DIR=/tmp \
     PYVER=3.12.7
 
-# --- Wine (amd64) + утилиты ---------------------------------------------------
-RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip xz-utils \
-        wine wine64 \
-    && rm -rf /var/lib/apt/lists/*
+# --- Wine 9.x + утилиты -------------------------------------------------------
+RUN dpkg --add-architecture i386 && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl wget unzip xz-utils && \
+    mkdir -pm755 /etc/apt/keyrings && \
+    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key && \
+    wget -O /etc/apt/sources.list.d/winehq-jammy.sources https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends winehq-stable && \
+    rm -rf /var/lib/apt/lists/*
 
 # --- Инициализация Wine-префикса ----------------------------------------------
 RUN wineboot --init >/dev/null 2>&1; wineserver -w
 
-# --- Windows-CPython: embeddable-дистрибутив + pip -----------------------------
-# 1) python-<ver>-embed-amd64.zip — официальный архив CPython для Windows
-#    (python.exe, python312.dll, stdlib в python312.zip; без инсталлятора).
-# 2) правка python312._pth: включаем import site и Lib\site-packages
-#    (в embeddable по умолчанию изолированный режим — pip не смог бы ставить).
-# 3) get-pip.py (PyPA, канонический URL bootstrap.pypa.io/get-pip.py) ставит
-#    pip + setuptools. ВАЖНО: у PyPA больше НЕТ версионного пути
-#    /pip/<minor>/get-pip.py для актуальных Python (для 3.12 он отдаёт 404 —
-#    именно на этом сборка падала); отдельная раскладка /pip/<старая-версия>/
-#    существует только для EOL-интерпретаторов (<=3.9). Берём универсальный
-#    корневой get-pip.py, который сам подбирает совместимый pip.
-# 4) В embeddable-архиве нет OpenSSL (libssl-3.dll / libcrypto-3.dll). Их
-#    берём из официального инсталлятора CPython той же версии: MSI распаковывается
-#    нативным `msiexec /a` (административная установка, Wine не нужен), затем
-#    DLL кладутся в каталог embeddable-питона. Никаких wine-инсталляторов,
-#    никаких компиляций — только детерминированные URL python.org/ftp.
-# 5) финальная проверка: интерпретатор + ssl + работоспособный pip.
+# --- Windows-CPython: embeddable-дистрибутив + pip + официальные OpenSSL DLLs -
 ENV GETPIP_URL=https://bootstrap.pypa.io/get-pip.py \
     GETPIP_URL_EOL=https://bootstrap.pypa.io/pip/3.9/get-pip.py
+
 RUN set -eux; \
-    curl -fsSL -o /tmp/py.zip \
+    # 1. Скачиваем и распаковываем embeddable версию Python 3.12
+    curl -fsSL -o /tmp/py-embed.zip \
       "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-embed-amd64.zip"; \
     mkdir -p /root/.wine/drive_c/Python312; \
-    unzip -q /tmp/py.zip -d /root/.wine/drive_c/Python312; \
-    rm /tmp/py.zip; \
+    unzip -q /tmp/py-embed.zip -d /root/.wine/drive_c/Python312; \
+    rm /tmp/py-embed.zip; \
     pth="$(ls /root/.wine/drive_c/Python312/python*._pth)"; \
     sed -i -e 's/^#\?import site/import site/' \
            -e '$a Lib\\site-packages' "$pth"; \
-    cat "$pth"; \
+    \
+    # 2. Устанавливаем pip
     curl -fsSL -o /tmp/get-pip.py "$GETPIP_URL" \
       || curl -fsSL -o /tmp/get-pip.py "$GETPIP_URL_EOL"; \
-    wine 'C:\\Python312\\python.exe' /tmp/get-pip.py --no-cache-dir -q \
+    wine 'C:\Python312\python.exe' /tmp/get-pip.py --no-cache-dir -q \
       || { echo "ERROR: get-pip failed"; wineserver -w; exit 1; }; \
     rm /tmp/get-pip.py; \
-    curl -fsSL -o /tmp/py.msi \
-      "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-amd64.msi"; \
-    msiexec /i /tmp/py.msi /a /tmp/msi X64DIRDIR=Lib TARGETDIR=/tmp/msi >/dev/null 2>&1 \
-      || msiexec /i /tmp/py.msi /a /tmp/msi >/dev/null 2>&1 || true; \
-    ssl_dll="$(find /tmp/msi -iname 'libssl*.dll' | head -1)"; \
-    crypto_dll="$(find /tmp/msi -iname 'libcrypto*.dll' | head -1)"; \
-    test -n "$ssl_dll"; test -n "$crypto_dll"; \
-    cp -f "$ssl_dll" /root/.wine/drive_c/Python312/libssl-3.dll; \
-    cp -f "$crypto_dll" /root/.wine/drive_c/Python312/libcrypto-3.dll; \
-    ls -la /root/.wine/drive_c/Python312/libssl-3.dll /root/.wine/drive_c/Python312/libcrypto-3.dll; \
-    rm -rf /tmp/msi /tmp/py.msi; \
+    \
+    # 3. Скачиваем ПОЛНЫЙ архив Python (не embed), чтобы забрать оттуда официальные DLL OpenSSL
+    curl -fsSL -o /tmp/py-full.zip \
+      "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-amd64.zip"; \
+    mkdir -p /tmp/py_full_extract; \
+    unzip -q /tmp/py-full.zip -d /tmp/py_full_extract; \
+    \
+    # Копируем официальные DLL OpenSSL из полной версии в нашу embeddable-сборку
+    cp -f /tmp/py_full_extract/DLLs/libssl-3.dll /root/.wine/drive_c/Python312/libssl-3.dll; \
+    cp -f /tmp/py_full_extract/DLLs/libcrypto-3.dll /root/.wine/drive_c/Python312/libcrypto-3.dll; \
+    \
+    # 4. Очистка и финальная проверка
+    rm -rf /tmp/py-full.zip /tmp/py_full_extract; \
     wineserver -w; \
-    wine 'C:\\Python312\\python.exe' -c \
-      "import ssl, sys; print('windows-python OK:', sys.version, '| TLS:', ssl.OPENSSL_VERSION)"; \
-    wine 'C:\\Python312\\python.exe' -m pip --version; \
+    wine 'C:\Python312\python.exe' -c "import ssl, sys; print('windows-python OK:', sys.version, '| TLS:', ssl.OPENSSL_VERSION)"; \
+    wine 'C:\Python312\python.exe' -m pip --version; \
     wineserver -w
 
-# Путь к Windows-Python внутри префикса (C: => /root/.wine/drive_c)
-ENV PYDIR='C:\\Python312' \
+ENV PYDIR='C:\Python312' \
     PYWINE='/root/.wine/drive_c/Python312/python.exe'
 
 # --- Зависимости сборки (кэшируются отдельно от исходников) -------------------
@@ -95,7 +79,6 @@ COPY . /work
 RUN rm -rf /work/dist-windows /work/build \
     && wine "$PYWINE" -m PyInstaller build.spec --distpath /work/dist-windows --workpath /tmp/build -y \
     && wineserver -w \
-    # Портативный режим: данные рядом с exe, ничего не пишется в профиль пользователя
     && printf '@echo off\r\nset IDPRO_PORTABLE=1\r\ncd /d "%%~dp0"\r\nstart "" "IDPRO.exe" %%*\r\n' \
          > /work/dist-windows/IDPRO/run-portable.bat
 
