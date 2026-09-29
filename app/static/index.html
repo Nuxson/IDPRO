@@ -29,12 +29,20 @@
   .b-ok { background:rgba(74,222,128,.15); color:var(--ok); }
   .b-err { background:rgba(248,113,113,.15); color:var(--err); }
   .hint { font-size:.78rem; color:#64748b; margin-top:6px; }
-  /* Вкладки: форма ввода и список базы раздельно */
+  /* Вкладки: формы ввода, база данных и проверка кода — раздельно.
+     Переключение через якоря (#input/#database/#validate): работает даже
+     если JS не выполнился; вёрстка на :target + fallback-класс .active */
   .tabs { display:flex; gap:8px; margin:18px 0 16px; flex-wrap:wrap; }
-  .tab-btn { margin:0; width:auto; padding:10px 22px; border-radius:10px 10px 0 0; background:#1e293b; color:#94a3b8; font-weight:600; border:1px solid #334155; border-bottom:none; }
+  .tab-btn { display:inline-block; text-decoration:none; margin:0; width:auto; padding:10px 22px; border-radius:10px 10px 0 0; background:#1e293b; color:#94a3b8; font-weight:600; border:1px solid #334155; border-bottom:none; cursor:pointer; font-size:1rem; }
+  .tab-btn:hover { filter:brightness(1.2); }
   .tab-btn.active { background:var(--card); color:var(--accent); border-color:var(--accent); }
   .tab-panel { display:none; }
   .tab-panel.active { display:block; }
+  /* Без JS: по умолчанию показываем панель ввода; при переходе по якорю — нужную */
+  #tab-input { display:block; }
+  #tab-database:target, #tab-validate:target { display:block; }
+  body:has(#tab-database:target) #tab-input,
+  body:has(#tab-validate:target) #tab-input { display:none; }
   .actions { display:flex; gap:6px; white-space:nowrap; }
   .btn-sm { margin:0; width:auto; padding:5px 12px; font-size:.8rem; border-radius:6px; }
   .btn-edit { background:#fbbf24; color:#422006; }
@@ -50,8 +58,9 @@
   <h1>🔑 Генератор уникальных ID</h1>
 
   <div class="tabs">
-    <button type="button" class="tab-btn active" data-tab="input">Ввод данных</button>
-    <button type="button" class="tab-btn" data-tab="database">База данных (список)</button>
+    <a href="#input" class="tab-btn active" data-tab="input">Ввод данных</a>
+    <a href="#database" class="tab-btn" data-tab="database">База данных (список)</a>
+    <a href="#validate" class="tab-btn" data-tab="validate">Проверка кода</a>
   </div>
 
   <!-- ======== Вкладка 1: формы ввода ======== -->
@@ -102,17 +111,6 @@
         <div class="hint">JSON-конфиги создаются программой автоматически при первом запуске (или командой python cli.py codes-init) и хранятся в папке config/. При генерации ID готовые коды подставляются в код; если имени нет в справочнике — программа сообщит об ошибке.</div>
       </div>
 
-      <div class="card">
-        <h2>Проверить ID</h2>
-        <form id="verForm">
-          <label>Код для проверки</label>
-          <input name="id" placeholder="напр. RM4KF-VT-A2238-HYEQ" required style="letter-spacing:1px">
-          <button type="submit">Проверить</button>
-        </form>
-        <div class="result" id="verResult"></div>
-        <div class="hint">Проверка контрольного кода работает даже без доступа к базе (как CRC у серийных номеров).</div>
-      </div>
-
     </div>
   </section>
 
@@ -128,6 +126,20 @@
       <div id="list"><em style="color:#64748b">—</em></div>
       <div class="result" id="dbMsg"></div>
       <div class="hint">«Редактировать» — меняйте поля прямо в строке; после «Сохранить» UID будет пересчитан автоматически по новым данным (справочники и формат проверяются). «Удалить» убирает запись из базы без возможности восстановления.</div>
+    </div>
+  </section>
+
+  <!-- ======== Вкладка 3: проверка кода (отдельная вкладка) ======== -->
+  <section class="tab-panel" id="tab-validate">
+    <div class="card">
+      <h2>Проверить ID</h2>
+      <form id="verForm">
+        <label>Код для проверки</label>
+        <input name="id" placeholder="напр. RM4KF-VT-A2238-HYEQ" required style="letter-spacing:1px">
+        <button type="submit">Проверить</button>
+      </form>
+      <div class="result" id="verResult"></div>
+      <div class="hint">Проверка контрольного кода работает даже без доступа к базе (как CRC у серийных номеров). Если код корректен и есть во внутренней базе — показывается карточка изделия.</div>
     </div>
   </section>
 </div>

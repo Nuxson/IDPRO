@@ -194,23 +194,29 @@ def update_record(raw_id: str, changes: dict, secret: str | None = None,
             raise KeyError(f"Запись не найдена: {raw_id}")
         new_vals = {k: (str(v).strip() if v is not None else "")
                     for k, v in changes.items() if k in EDITABLE_FIELDS}
-        changed = any(new_vals[k] != row[k] for k in new_vals)
+        merged = {k: row[k] for k in EDITABLE_FIELDS}
+        merged.update(new_vals)
+        # валидация и канонизация НОВОЙ комбинации полей через make_id
+        # (справочники, формат порта/площадки); сравнение ведём по каноническим
+        # значениям — иначе регистр из базы («ЭРИКССОН») не совпадёт с введённым
+        try:
+            rec = make_id(merged["producer"], merged["location"], merged["company"],
+                          merged["serial"], merged["port"], merged["site"],
+                          dt=row["date"], secret=secret)
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+        nf = rec["fields"]
+        changed = any(nf[k] != row[k] for k in EDITABLE_FIELDS)
         if changed:
-            merged = {k: row[k] for k in EDITABLE_FIELDS}
-            merged.update(new_vals)
-            # валидация новых значений через make_id (справочники, формат порта/площадки)
-            try:
-                rec = make_id(merged["producer"], merged["location"], merged["company"],
-                              merged["serial"], merged["port"], merged["site"],
-                              dt=row["date"], secret=secret)
-            except ValueError as e:
-                raise ValueError(str(e)) from e
+            clash = conn.execute("SELECT 1 FROM ids WHERE compact=?",
+                                 (rec["compact"],)).fetchone()
+            if clash:
+                raise ValueError("Запись с такими данными уже существует в базе")
             conn.execute(
                 """UPDATE ids SET producer=?, location=?, company=?, serial=?,
                           port=?, site=?, id=?, compact=?, canonical=? WHERE id=?""",
-                (rec["fields"]["producer"], rec["fields"]["location"],
-                 rec["fields"]["company"], rec["fields"]["serial"],
-                 rec["fields"]["port"], rec["fields"]["site"],
+                (nf["producer"], nf["location"], nf["company"],
+                 nf["serial"], nf["port"], nf["site"],
                  rec["id"], rec["compact"], rec["canonical"], row["id"]),
             )
             row = conn.execute("SELECT * FROM ids WHERE compact=?",
