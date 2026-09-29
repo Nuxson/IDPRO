@@ -1,0 +1,114 @@
+74 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.7
+74 INFO: Python: 3.12.10
+75 INFO: Platform: Linux-4.19.91-c8dfc93.al7.x86_64-x86_64-with-glibc2.36
+75 INFO: Python environment: /usr/local
+77 INFO: Module search paths (PYTHONPATH):
+['/workspace',
+ '/usr/local/lib/python312.zip',
+ '/usr/local/lib/python3.12',
+ '/usr/local/lib/python3.12/lib-dynload',
+ '/usr/local/lib/python3.12/site-packages',
+ '/workspace']
+OpenBLAS WARNING - could not determine the L2 cache size on this system, assuming 256k
+205 WARNING: discover_hook_directories: Failed to process hook entry point 'EntryPoint(name='hook-dirs', value='rapidfuzz.__pyinstaller:get_hook_dirs', group='pyinstaller40')': AttributeError: module 'rapidfuzz.__pyinstaller' has no attribute 'get_hook_dirs'
+395 INFO: Appending 'datas' from .spec
+395 INFO: checking Analysis
+395 INFO: Building Analysis because Analysis-00.toc is non existent
+395 INFO: Looking for Python shared library...
+401 INFO: Using Python shared library: /usr/local/lib/libpython3.12.so.1.0
+401 INFO: Running Analysis Analysis-00.toc
+401 INFO: Target bytecode optimization level: 0
+402 INFO: Initializing module dependency graph...
+402 INFO: Initializing module graph hook caches...
+425 INFO: Analyzing modules for base_library.zip ...
+1302 INFO: Processing standard module hook 'hook-encodings.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+1866 INFO: Processing standard module hook 'hook-math.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+2967 INFO: Processing standard module hook 'hook-pickle.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+4834 INFO: Processing standard module hook 'hook-heapq.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+5301 INFO: Caching module dependency graph...
+5356 INFO: Analyzing /workspace/run_app.py
+5386 INFO: Processing standard module hook 'hook-webbrowser.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+5402 INFO: Processing standard module hook 'hook-uvicorn.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+5867 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+6070 INFO: Processing standard module hook 'hook-xml.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+6359 INFO: Processing standard module hook 'hook-_ctypes.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+7236 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7237 INFO: SetuptoolsInfo: initializing cached setuptools info...
+12223 INFO: Processing standard module hook 'hook-platform.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+12309 INFO: Processing standard module hook 'hook-difflib.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+12870 INFO: Processing standard module hook 'hook-websockets.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+14240 INFO: Processing standard module hook 'hook-cryptography.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+14732 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+15298 INFO: Processing standard module hook 'hook-sysconfig.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+15647 INFO: Processing standard module hook 'hook-anyio.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+16646 INFO: Processing standard module hook 'hook-uvloop.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+17099 INFO: Processing standard module hook 'hook-pydantic.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+/usr/local/lib/python3.12/site-packages/pydantic/experimental/__init__.py:7: PydanticExperimentalWarning: This module is experimental, its contents are subject to change and deprecation.
+  warnings.warn(
+17754 INFO: Processing standard module hook 'hook-rich.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+18108 INFO: Processing standard module hook 'hook-pygments.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+18796 INFO: Processing standard module hook 'hook-chardet.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+20814 INFO: Processing standard module hook 'hook-zoneinfo.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+21402 INFO: Processing standard module hook 'hook-certifi.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+22294 INFO: Processing standard module hook 'hook-dns.rdata.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+24133 INFO: Processing standard module hook 'hook-sqlite3.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+24311 INFO: Processing module hooks (post-graph stage)...
+25046 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+25299 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+25299 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+25306 INFO: Processing standard module hook 'hook-setuptools.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+25323 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+25357 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+25357 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+25370 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+25370 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+26001 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+26003 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+26037 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+26037 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+26245 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+26276 INFO: Processing standard module hook 'hook-importlib_metadata.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+26304 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+27099 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/pre_safe_import_module'
+27099 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+27558 INFO: Processing standard module hook 'hook-PIL.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+27745 INFO: Processing standard module hook 'hook-PIL.Image.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+27954 INFO: Processing standard module hook 'hook-numpy.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+29430 INFO: Processing standard module hook 'hook-psutil.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+30703 INFO: Processing standard module hook 'hook-charset_normalizer.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+31050 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+31150 INFO: Processing standard module hook 'hook-xml.dom.domreg.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+31648 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+35070 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks'
+35427 INFO: Performing binary vs. data reclassification (22 entries)
+35437 INFO: Looking for ctypes DLLs
+35548 INFO: Analyzing run-time hooks ...
+35560 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/rthooks'
+35562 INFO: Including run-time hook 'pyi_rth_inspect.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/rthooks'
+35565 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/rthooks'
+35568 INFO: Including run-time hook 'pyi_rth_setuptools.py' from '/usr/local/lib/python3.12/site-packages/PyInstaller/hooks/rthooks'
+35569 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from '/usr/local/lib/python3.12/site-packages/_pyinstaller_hooks_contrib/rthooks'
+35608 INFO: Creating base_library.zip...
+35635 INFO: Looking for dynamic libraries
+36337 INFO: Warnings written to /workspace/build/build/warn-build.txt
+36465 INFO: Graph cross-reference written to /workspace/build/build/xref-build.html
+36517 INFO: checking PYZ
+36518 INFO: Building PYZ because PYZ-00.toc is non existent
+36518 INFO: Building PYZ (ZlibArchive) /workspace/build/build/PYZ-00.pyz
+37968 INFO: Building PYZ (ZlibArchive) /workspace/build/build/PYZ-00.pyz completed successfully.
+38003 INFO: checking PKG
+38003 INFO: Building PKG because PKG-00.toc is non existent
+38003 INFO: Building PKG (CArchive) IDPRO.pkg
+38034 INFO: Building PKG (CArchive) IDPRO.pkg completed successfully.
+38035 INFO: Bootloader /usr/local/lib/python3.12/site-packages/PyInstaller/bootloader/Linux-64bit-intel/run
+38035 INFO: checking EXE
+38035 INFO: Building EXE because EXE-00.toc is non existent
+38035 INFO: Building EXE from EXE-00.toc
+38035 INFO: Copying bootloader EXE to /workspace/build/build/IDPRO
+38036 INFO: Appending PKG archive to custom ELF section in EXE
+38092 INFO: Building EXE from EXE-00.toc completed successfully.
+38095 INFO: checking COLLECT
+38095 INFO: Building COLLECT because COLLECT-00.toc is non existent
+38095 INFO: Building COLLECT COLLECT-00.toc
+38449 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+38454 INFO: Build complete! The results are available in: /workspace/dist
