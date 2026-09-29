@@ -1,26 +1,6 @@
-# Build artifacts (PyInstaller)
-build/
-dist/
-
-# Python compiled files and caches
+# Python bytecode and caches
 __pycache__/
 *.pyc
-*.pyo
-*.egg-info/
-
-# Virtual environments
-.venv/
-venv/
-
-# Editor and IDE settings
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# System and OS files
-.DS_Store
-Thumbs.db
 
 # Logs and temporary files
 *.log
