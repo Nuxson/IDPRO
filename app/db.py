@@ -169,6 +169,69 @@ def list_ids(limit: int = 100, db_path: Path | str = DB_PATH) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# ---------- Редактирование и удаление записей базы ----------
+
+#: Поля записи, доступные для изменения из интерфейса.
+#: id/compact/canonical/date — служебные, вычисляются из этих полей заново.
+EDITABLE_FIELDS = ("producer", "location", "company", "serial", "port", "site")
+
+
+def update_record(raw_id: str, changes: dict, secret: str | None = None,
+                  db_path: Path | str = DB_PATH) -> dict:
+    """Изменяет редактируемые поля записи; код пересчитывается автоматически.
+
+    changes — словарь с ключами из EDITABLE_FIELDS (можно частичное обновление).
+    Возвращает {"record": ..., "changed": bool}.
+    """
+    unknown = set(changes) - set(EDITABLE_FIELDS)
+    if unknown:
+        raise ValueError("Неизвестные поля: " + ", ".join(sorted(unknown)))
+    compact = normalize_id(raw_id)
+    with get_conn(db_path) as conn:
+        _migrate(conn)
+        row = conn.execute("SELECT * FROM ids WHERE compact=?", (compact,)).fetchone()
+        if row is None:
+            raise KeyError(f"Запись не найдена: {raw_id}")
+        new_vals = {k: (str(v).strip() if v is not None else "")
+                    for k, v in changes.items() if k in EDITABLE_FIELDS}
+        merged = {k: row[k] for k in EDITABLE_FIELDS}
+        merged.update(new_vals)
+        # валидация и канонизация НОВОЙ комбинации полей через make_id
+        # (справочники, формат порта/площадки); сравнение ведём по каноническим
+        # значениям — иначе регистр из базы («ЭРИКССОН») не совпадёт с введённым
+        try:
+            rec = make_id(merged["producer"], merged["location"], merged["company"],
+                          merged["serial"], merged["port"], merged["site"],
+                          dt=row["date"], secret=secret)
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+        nf = rec["fields"]
+        changed = any(nf[k] != row[k] for k in EDITABLE_FIELDS)
+        if changed:
+            clash = conn.execute("SELECT 1 FROM ids WHERE compact=?",
+                                 (rec["compact"],)).fetchone()
+            if clash:
+                raise ValueError("Запись с такими данными уже существует в базе")
+            conn.execute(
+                """UPDATE ids SET producer=?, location=?, company=?, serial=?,
+                          port=?, site=?, id=?, compact=?, canonical=? WHERE id=?""",
+                (nf["producer"], nf["location"], nf["company"],
+                 nf["serial"], nf["port"], nf["site"],
+                 rec["id"], rec["compact"], rec["canonical"], row["id"]),
+            )
+            row = conn.execute("SELECT * FROM ids WHERE compact=?",
+                               (rec["compact"],)).fetchone()
+        return {"record": dict(row), "changed": changed}
+
+
+def delete_record(raw_id: str, db_path: Path | str = DB_PATH) -> bool:
+    """Удаляет запись из базы по ID (с разделителями или без). True — если удалено."""
+    compact = normalize_id(raw_id)
+    with get_conn(db_path) as conn:
+        cur = conn.execute("DELETE FROM ids WHERE compact=?", (compact,))
+        return cur.rowcount > 0
+
+
 # ---------- Экспорт данных (CSV / Excel) ----------
 
 EXPORT_HEADERS = {
