@@ -1,6 +1,15 @@
 # ============================================================================
 # Docker-образ: Wine + Windows-Python + PyInstaller => IDPRO.exe на Linux-хосте
-# Многослойный: базовый слой (Wine, ~тяжёлый) кэшируется docker buildx.
+#
+# Почему НЕ «wine python-3.12.x-amd64.exe /quiet»: бутстрапёр инсталлятора
+# CPython под Debian-Wine 6.0 падает с rc=123 (не хватает wine-gecko/mono,
+# comctl32 v6, winbind; в логе — пустой drive_c без Python312).
+# Вместо этого используется ОФИЦИАЛЬНЫЙ embeddable-архив CPython для Windows
+# (тот же самый интерпретатор python.org) + bootstrap pip через get-pip.py.
+# Никаких инсталляторов, никаких MSI — только распаковка zip. Детерминированно.
+#
+# Слои (кэшируются по порядку): apt+Wine -> wineprefix -> python+pip ->
+# -> зависимости сборки -> код проекта. Изменение кода не пересобирает всё выше.
 # ============================================================================
 FROM ubuntu:22.04
 
@@ -10,41 +19,72 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
     PYVER=3.12.7
 
-# --- Wine (amd64) + утилиты -------------------------------------------------
+# --- Wine (amd64) + утилиты ---------------------------------------------------
 RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip xz-utils \
         wine wine64 \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Инициализация Wine-префикса --------------------------------------------
-RUN wineboot --init && wineserver -w
+# --- Инициализация Wine-префикса ----------------------------------------------
+RUN wineboot --init >/dev/null 2>&1; wineserver -w
 
-# --- Windows-CPython (embeddable + pip, полноценный для PyInstaller) --------
-# Берём официальный инсталлятор python.org и ставим его ТИХО в Wine:
-# InstallLauncherAllUsers=0 — без системных прав (и так root в контейнере,
-# но путь остаётся пользовательским).
-RUN curl -fsSL -o /tmp/py.exe \
-      "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-amd64.exe" \
-    && wine /tmp/py.exe /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_launcher=0 SimpleInstall=1 TargetDir=C:\\Python312; rc=$?; \
-       wineserver -w; \
-       if [ $rc -ne 0 ] || [ ! -f /root/.wine/drive_c/Python312/python.exe ]; then \
-         echo "ERROR: Windows-Python installer failed under Wine (rc=$rc)"; \
-         ls -la /root/.wine/drive_c/ 2>/dev/null; \
-         exit 1; \
-       fi; \
-       rm /tmp/py.exe
+# --- Windows-CPython: embeddable-дистрибутив + pip -----------------------------
+# 1) python-<ver>-embed-amd64.zip — официальный архив CPython для Windows
+#    (python.exe, python312.dll, stdlib в python312.zip; без инсталлятора).
+# 2) правка python312._pth: включаем import site и Lib\site-packages
+#    (в embeddable по умолчанию изолированный режим — pip не смог бы ставить).
+# 3) get-pip.py (staple-версия от PyPA, детерминированный URL) ставит pip,
+#    setuptools и pre-built cryptography wheel. В embeddable-архиве нет
+#    libssl/libcrypto — берём их из bin-колес cryptography (там лежат ровно
+#    те же DLL, что идут с полным инсталлятором CPython).
+# 4) финальная проверка: интерпретатор + ssl + работоспособный pip.
+ENV GETPIP_VER=2024-08-08 \
+    CRYPTO_VER=43.0.0
+RUN set -eux; \
+    curl -fsSL -o /tmp/py.zip \
+      "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-embed-amd64.zip"; \
+    mkdir -p /root/.wine/drive_c/Python312; \
+    unzip -q /tmp/py.zip -d /root/.wine/drive_c/Python312; \
+    rm /tmp/py.zip; \
+    pth="$(ls /root/.wine/drive_c/Python312/python*._pth)"; \
+    sed -i -e 's/^#\?import site/import site/' \
+           -e '$a Lib\\site-packages' "$pth"; \
+    cat "$pth"; \
+    curl -fsSL -o /tmp/get-pip.py \
+      "https://bootstrap.pypa.io/pip/${PYVER%.*}/get-pip.py"; \
+    wine 'C:\\Python312\\python.exe' /tmp/get-pip.py --no-cache-dir -q \
+      || { echo "ERROR: get-pip failed"; wineserver -w; exit 1; }; \
+    rm /tmp/get-pip.py; \
+    curl -fsSL -o /tmp/crypt.whl \
+      "https://files.pythonhosted.org/packages/source/c/cryptography/cryptography-${CRYPTO_VER}.tar.gz" \
+      || true; \
+    wine 'C:\\Python312\\python.exe' -m pip download -q --only-binary :all: \
+      --no-deps --dest /tmp "cryptography==${CRYPTO_VER}" \
+      || { echo "ERROR: pip download cryptography failed"; wineserver -w; exit 1; }; \
+    whl="$(ls /tmp/cryptography-*cp312*win_amd64*.whl | head -1)"; \
+    cd /tmp && unzip -q -o "$whl" 'cryptography/hazmat/bindings/*.dll'; \
+    cp -f /tmp/cryptography/hazmat/bindings/libssl-3-x64.dll /root/.wine/drive_c/Python312/libssl-3.dll \
+      2>/dev/null || cp -f "$(find /tmp/cryptography -name 'libssl*.dll' | head -1)" /root/.wine/drive_c/Python312/libssl-3.dll; \
+    cp -f /tmp/cryptography/hazmat/bindings/libcrypto-3-x64.dll /root/.wine/drive_c/Python312/libcrypto-3.dll \
+      2>/dev/null || cp -f "$(find /tmp/cryptography -name 'libcrypto*.dll' | head -1)" /root/.wine/drive_c/Python312/libcrypto-3.dll; \
+    rm -rf /tmp/cryptography /tmp/*.whl; \
+    wineserver -w; \
+    wine 'C:\\Python312\\python.exe' -c \
+      "import ssl, sys; print('windows-python OK:', sys.version, '| TLS:', ssl.OPENSSL_VERSION)"; \
+    wine 'C:\\Python312\\python.exe' -m pip --version; \
+    wineserver -w
 
 # Путь к Windows-Python внутри префикса (C: => /root/.wine/drive_c)
 ENV PYDIR='C:\\Python312' \
     PYWINE='/root/.wine/drive_c/Python312/python.exe'
 
-# --- Зависимости сборки (кэшируются отдельно от исходников) -----------------
-RUN wine "$PYWINE" -m pip install --no-cache-dir --upgrade pip \
+# --- Зависимости сборки (кэшируются отдельно от исходников) -------------------
+RUN wine "$PYWINE" -m pip install --no-cache-dir --upgrade pip setuptools \
     && wine "$PYWINE" -m pip install --no-cache-dir \
         "pyinstaller==6.11.0" "fastapi>=0.116" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
     && wineserver -w
 
-# --- Копируем проект и собираем EXE -----------------------------------------
+# --- Копируем проект и собираем EXE --------------------------------------------
 WORKDIR /work
 COPY . /work
 RUN rm -rf /work/dist-windows /work/build \
