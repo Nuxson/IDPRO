@@ -4,9 +4,10 @@
 # PyInstaller физически не умеет собирать "на кроссе" (Linux -> Windows),
 # поэтому внутри контейнера крутится Wine + Windows-версии Python/PyInstaller.
 #
-# Требования: docker с плагином buildx (есть в любом современном Docker Desktop
-#             / Docker Engine 20+). Права админа на хосте для самой сборки НЕ
-#             нужны, но группа `docker` выдать их может — собирайте на своей машине.
+# Требования: запущенный демон docker (или podman). На Manjaro после установки:
+#   sudo systemctl enable --now docker.socket docker.service
+#   sudo usermod -aG docker $USER   # затем перезайти в систему
+# Если вместо docker используете podman — скрипт определит его сам.
 #
 # Использование:
 #   ./build_windows_docker.sh            # обычная сборка
@@ -21,32 +22,50 @@ cd "$(dirname "$0")"
 CLEAN_FLAG=""
 if [[ "${1:-}" == "--clean" ]]; then CLEAN_FLAG="--no-cache"; fi
 
-# 0. Определяем движок сборки: docker c buildx -> podman -> plain docker build.
+# 0. Определяем движок сборки: podman -> docker c buildx -> plain docker build.
 #    На Manjaro часто стоит podman (alias docker=podman), у которого нет плагина
 #    buildx и который по-своему трактует некоторые флаги — поэтому подбираем
 #    рабочую команду автоматически.
 detect_engine() {
-  if command -v podman >/dev/null 2>&1; then
+  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
     echo "podman build"
-  elif docker buildx version >/dev/null 2>&1; then
-    echo "docker buildx build"
+  elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if docker buildx version >/dev/null 2>&1; then
+      echo "docker buildx build"
+    else
+      echo "docker build"
+    fi
   else
-    echo "docker build"
+    echo "ERROR"
   fi
 }
 ENGINE=$(detect_engine)
+if [[ "$ENGINE" == "ERROR" ]]; then
+  echo "ОШИБКА: не найден запущенный контейнерный движок (docker/podman)." >&2
+  echo "Docker не отвечает на unix:///var/run/docker.sock — скорее всего," >&2
+  echo "демон docker не запущен. На Manjaro/Arch:" >&2
+  echo "  sudo systemctl enable --now docker.socket docker.service" >&2
+  echo "  sudo usermod -aG docker \$USER   # затем выйти и зайти снова" >&2
+  echo "Проверка: docker info" >&2
+  echo "" >&2
+  echo "Альтернатива без демона — rootless podman:" >&2
+  echo "  sudo pacman -S podman && podman system migrate" >&2
+  exit 1
+fi
 echo "движок сборки: $ENGINE"
+BUILD_CMD=($ENGINE)
+if [[ "${ENGINE%% *}" == "docker" ]]; then CLI=(docker); else CLI=(podman); fi
 
 # 1. Собираем образ (кэшируется: повторные сборки идут с шага копирования кода).
 #    Dockerfile передаём через stdin (-f -): так команду принимают и docker,
-#    и podman, и старые версии без buildx.
-$ENGINE $CLEAN_FLAG -f - -t idpro-win-builder . < Dockerfile.windows
+#    и podman, и старые версии без buildx. Контекст — текущая директория.
+"${BUILD_CMD[@]}" $CLEAN_FLAG -f - -t idpro-win-builder . < Dockerfile.windows
 
 # 2. Запускаем сборку внутри контейнера, результат — в ./dist-windows
 rm -rf dist-windows
-cid=$(docker create idpro-win-builder)
-trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-docker cp "$cid:/work/dist-windows/." ./dist-windows/
+cid=$("${CLI[@]}" create idpro-win-builder)
+trap '"${CLI[@]}" rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+"${CLI[@]}" cp "$cid:/work/dist-windows/." ./dist-windows/
 
 # 3. Проверяем, что это действительно PE-бинарник Windows, а не ELF
 file dist-windows/IDPRO/IDPRO.exe | grep -q 'PE32' \
