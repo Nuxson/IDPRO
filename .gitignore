@@ -1,7 +1,21 @@
-# Python bytecode and caches
+# Build artifacts
+build/
+dist/
+
+# Python compiled files and caches
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
 
-# Logs and temporary files
-*.log
-*.tmp
+# Virtual environments
+venv/
+.venv/
+env/
