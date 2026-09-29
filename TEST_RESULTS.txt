@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.9.0, Faker-37.4.2
+collected 57 items
+
+tests/test_idgen.py .................................................... [ 91%]
+.....                                                                    [100%]
+
+============================== 57 passed in 1.06s ==============================
