@@ -18,6 +18,8 @@ def _data_dir() -> Path:
     if env_db:
         return Path(env_db).resolve().parent
     if getattr(__import__("sys"), "frozen", False):  # PyInstaller
+        # Портативный режим: данные рядом с exe (папка переносится целиком,
+        # без записи в профиль пользователя и без прав администратора).
         return Path(__import__("sys").executable).resolve().parent
     return Path(__file__).resolve().parent.parent
 

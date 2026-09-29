@@ -82,12 +82,72 @@ app/db.py              # SQLite-база выданных кодов (ids.db)
 app/main.py            # FastAPI REST + статика
 app/static/index.html  # веб-интерфейс (создать / проверить)
 cli.py                 # командная строка
+run_app.py             # запуск сервера (веб-интерфейс)
+build.spec             # конфигурация PyInstaller (одна сборка под все ОС)
+Dockerfile.windows     # Docker-образ Wine + Windows-CPython для сборки .exe
+build_windows_docker.sh# скрипт портативной Windows-сборки из-под Linux
+config/*.json          # редактируемые справочники (производители, компании и т.д.)
 tests/test_idgen.py    # тесты (pytest)
 ```
 
 ## Требования
 * Python 3.9+
 * Зависимости — в `requirements.txt` (`fastapi`, `uvicorn`, `pytest` для тестов).
+
+## Установка (разработка, без админ-прав)
+```bash
+git clone <адрес репозитория> && cd idpro
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python run_app.py                 # веб-интерфейс на http://127.0.0.1:8000
+```
+
+## Сборка исполняемого файла (PyInstaller)
+Собрать бинарник **для той ОС, на которой запущена сборка** (кросс-сборки нет):
+```bash
+pip install pyinstaller
+python -m PyInstaller build.spec --noconfirm
+# результат: dist/IDPRO/ — самодостаточная папка (копировать целиком!)
+```
+* Linux: запуск `./dist/IDPRO/IDPRO`; переносится только на Linux-машины (ELF).
+* Windows: тот же `build.spec` даёт `dist\IDPRO\IDPRO.exe` — но собирать нужно
+  на Windows (см. ниже два способа получить .exe из-под Linux).
+
+## Портативная сборка для Windows (из-под Linux, через Docker)
+PyInstaller не собирает «на кроссе» (Linux → Windows), поэтому `.exe` строится
+внутри Docker-контейнера с Wine + Windows-CPython (`Dockerfile.windows`).
+
+```bash
+./build_windows_docker.sh         # нужен Docker; результат: dist-windows/IDPRO.zip
+```
+Первый прогон скачивает Wine (~1 ГБ) и Windows-CPython — дальше слои кэшируются,
+пересборка занимает минуты. Скрипт в конце проверяет, что получился настоящий
+Windows PE32 (`IDPRO.exe`), а не ELF, и упаковывает всё в zip.
+
+Перенос на целевой ПК (корпоративный Windows без Python и без админ-доступа):
+1. Скопируйте **всю папку** `dist-windows/IDPRO/` (или распакуйте `IDPRO.zip`)
+   в свою пользовательскую директорию, например `C:\Users\<вы>\IDPRO\`.
+   Нигде устанавливать ничего не нужно — режим portable.
+2. Запуск — двойным кликом **`run-portable.bat`** (ставит `IDPRO_PORTABLE=1`,
+   открывает браузер; база `ids.db` и справочники `config/` лежат рядом с exe —
+   папку можно носить хоть на флешке).
+   Прямой запуск `IDPRO.exe` тоже работает, но данные попадут в `%LOCALAPPDATA%\IDPRO`.
+3. Приложение слушает только `127.0.0.1:8000` (loopback), сетевой доступ извне
+   не открывается; сервисы не регистрируются, реестр не трогается.
+
+⚠️ Типичные проблемы политик ИБ:
+* неподписанный `IDPRO.exe` может блокироваться антивирусом — запросите исключение
+  по пути папки или используйте запасной вариант ниже (без exe вообще);
+* если Docker на вашей машине запрещён — соберите `.exe` на любом Windows-ПК
+  через portable-CPython (архив `.zip` с python.org, установка и админ не нужны):
+```bat
+set PATH=C:\Users\<вы>\py312;%PATH%
+py -m pip install --user -r requirements.txt pyinstaller
+py -m PyInstaller build.spec
+```
+* самый консервативный вариант без сборки: скопируйте на ПК portable-CPython
+  и исходники, запускайте `pythonw.exe run_app.py` — никаких неизвестных exe.
 
 ## JavaScript-часть UI (`app/static/js/`)
 
@@ -114,5 +174,9 @@ pytest tests/ -v
 | Переменная | Назначение | По умолчанию |
 |---|---|---|
 | `IDGEN_SECRET` | секрет HMAC для контрольного кода (CCKK) — передаётся в `checksum()/make_id()/verify_checksum()` как параметр `secret` | если не задан — открытая SHA-256 контрольная сумма (в бою задайте свой секрет!) |
+| `IDPRO_PORTABLE` | `1` — портативный режим собранного exe: база `ids.db` и справочники лежат рядом с `IDPRO.exe` (ставится автоматически скриптом `run-portable.bat`) | выключен: данные в `%LOCALAPPDATA%\IDPRO` (Windows) / `$XDG_DATA_HOME/IDPRO` или `~/.local/share/IDPRO` (Linux) |
 
-Путь к SQLite-базе выданных кодов: `ids.db` в корне проекта (параметр `db_path` во всех функциях `app/db.py`).
+Путь к SQLite-базе выданных кодов при запуске из исходников: `ids.db` в корне проекта
+(параметр `db_path` во всех функциях `app/db.py`). Для переопределения путей —
+`IDGEN_DB` (файл базы) и `IDGEN_CONFIG_DIR` (каталог справочников): они имеют
+приоритет над режимом portable.
