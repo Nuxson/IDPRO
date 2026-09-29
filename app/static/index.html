@@ -29,76 +29,107 @@
   .b-ok { background:rgba(74,222,128,.15); color:var(--ok); }
   .b-err { background:rgba(248,113,113,.15); color:var(--err); }
   .hint { font-size:.78rem; color:#64748b; margin-top:6px; }
+  /* Вкладки: форма ввода и список базы раздельно */
+  .tabs { display:flex; gap:8px; margin:18px 0 16px; flex-wrap:wrap; }
+  .tab-btn { margin:0; width:auto; padding:10px 22px; border-radius:10px 10px 0 0; background:#1e293b; color:#94a3b8; font-weight:600; border:1px solid #334155; border-bottom:none; }
+  .tab-btn.active { background:var(--card); color:var(--accent); border-color:var(--accent); }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+  .actions { display:flex; gap:6px; white-space:nowrap; }
+  .btn-sm { margin:0; width:auto; padding:5px 12px; font-size:.8rem; border-radius:6px; }
+  .btn-edit { background:#fbbf24; color:#422006; }
+  .btn-del { background:var(--err); color:#450a0a; }
+  .btn-save { background:var(--ok); color:#052e16; }
+  .btn-cancel { background:#334155; color:var(--txt); }
+  td input, td select { padding:6px 8px; font-size:.85rem; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>🔑 Генератор уникальных ID</h1>
-  <div class="grid">
 
-    <div class="card">
-      <h2>Создать ID</h2>
-      <form id="genForm">
-        <label>Производитель (из справочника config/producers.json)</label>
-        <select name="producer" required></select>
-        <label>Место положения</label>
-        <input name="location" placeholder="напр. Москва" required>
-        <label>Компания (из справочника config/companies.json)</label>
-        <select name="company" required></select>
-        <label>Серийный номер</label>
-        <input name="serial" placeholder="напр. SN-00123" required>
-        <label>Порт</label>
-        <select name="port">
-          <option value="TN_A">TN_A</option><option value="TN_B">TN_B</option><option value="TN_C">TN_C</option>
-        </select>
-        <label>Номер площадки</label>
-        <input name="site" inputmode="numeric" pattern="[0-9]+" title="Только цифры, без ограничений по разряду" placeholder="напр. 0, 6 или 1024" required>
-        <button type="submit">Сгенерировать и сохранить</button>
-      </form>
-      <div class="result" id="genResult"></div>
-      <div class="hint">Дата не вводится — фиксируется автоматически в момент генерации и сохраняется во внутренней базе (при проверке восстанавливается по коду). ID детерминирован: одинаковые данные → одинаковый код. Читаемая часть: первые 2 символа — код производителя из справочника, далее 3 символа — дата (месяц B=Январь…Q=Декабрь, день A=Пн…G=Вс), 2 символа — код компании из справочника, буква — порт TN_A/TN_B/TN_C, следующие 4 символа — номер площадки. Повторное сохранение вернёт существующий ID.</div>
+  <div class="tabs">
+    <button type="button" class="tab-btn active" data-tab="input">Ввод данных</button>
+    <button type="button" class="tab-btn" data-tab="database">База данных (список)</button>
+  </div>
+
+  <!-- ======== Вкладка 1: формы ввода ======== -->
+  <section class="tab-panel active" id="tab-input">
+    <div class="grid">
+
+      <div class="card">
+        <h2>Создать ID</h2>
+        <form id="genForm">
+          <label>Производитель (из справочника config/producers.json)</label>
+          <select name="producer" required></select>
+          <label>Место положения</label>
+          <input name="location" placeholder="напр. Москва" required>
+          <label>Компания (из справочника config/companies.json)</label>
+          <select name="company" required></select>
+          <label>Серийный номер</label>
+          <input name="serial" placeholder="напр. SN-00123" required>
+          <label>Порт</label>
+          <select name="port">
+            <option value="TN_A">TN_A</option><option value="TN_B">TN_B</option><option value="TN_C">TN_C</option>
+          </select>
+          <label>Номер площадки</label>
+          <input name="site" inputmode="numeric" pattern="[0-9]+" title="Только цифры, без ограничений по разряду" placeholder="напр. 0, 6 или 1024" required>
+          <button type="submit">Сгенерировать и сохранить</button>
+        </form>
+        <div class="result" id="genResult"></div>
+        <div class="hint">Дата не вводится — фиксируется автоматически в момент генерации и сохраняется во внутренней базе (при проверке восстанавливается по коду). ID детерминирован: одинаковые данные → одинаковый код. Читаемая часть: первые 2 символа — код производителя из справочника, далее 3 символа — дата (месяц B=Январь…Q=Декабрь, день A=Пн…G=Вс), 2 символа — код компании из справочника, буква — порт TN_A/TN_B/TN_C, следующие 4 символа — номер площадки. Повторное сохранение вернёт существующий ID.</div>
+      </div>
+
+      <div class="card">
+        <h2>Справочники кодов</h2>
+        <form id="codesForm">
+          <label>Что добавляем</label>
+          <select name="kind">
+            <option value="producers">Производители (config/producers.json)</option>
+            <option value="companies">Компании (config/companies.json)</option>
+          </select>
+          <label>Как задаём код</label>
+          <select name="mode">
+            <option value="auto">Авто — программа сама сгенерирует код по названию</option>
+            <option value="manual">Вручную — Название=КД (2 символа)</option>
+          </select>
+          <label>Названия (через запятую; для «вручную» — вид: Ромашка=RK, Вектор=VK)</label>
+          <textarea name="names" rows="3" placeholder="Ромашка-Завод, Вектор-Телеком"></textarea>
+          <button type="submit">Сохранить в конфиг</button>
+        </form>
+        <div class="result" id="codesResult"></div>
+        <div class="hint">JSON-конфиги создаются программой автоматически при первом запуске (или командой python cli.py codes-init) и хранятся в папке config/. При генерации ID готовые коды подставляются в код; если имени нет в справочнике — программа сообщит об ошибке.</div>
+      </div>
+
+      <div class="card">
+        <h2>Проверить ID</h2>
+        <form id="verForm">
+          <label>Код для проверки</label>
+          <input name="id" placeholder="напр. RM4KF-VT-A2238-HYEQ" required style="letter-spacing:1px">
+          <button type="submit">Проверить</button>
+        </form>
+        <div class="result" id="verResult"></div>
+        <div class="hint">Проверка контрольного кода работает даже без доступа к базе (как CRC у серийных номеров).</div>
+      </div>
+
     </div>
+  </section>
 
+  <!-- ======== Вкладка 2: база данных (отдельная вкладка, редактирование + удаление) ======== -->
+  <section class="tab-panel" id="tab-database">
     <div class="card">
-      <h2>Справочники кодов</h2>
-      <form id="codesForm">
-        <label>Что добавляем</label>
-        <select name="kind">
-          <option value="producers">Производители (config/producers.json)</option>
-          <option value="companies">Компании (config/companies.json)</option>
-        </select>
-        <label>Как задаём код</label>
-        <select name="mode">
-          <option value="auto">Авто — программа сама сгенерирует код по названию</option>
-          <option value="manual">Вручную — Название=КД (2 символа)</option>
-        </select>
-        <label>Названия (через запятую; для «вручную» — вид: Ромашка=RK, Вектор=VK)</label>
-        <textarea name="names" rows="3" placeholder="Ромашка-Завод, Вектор-Телеком"></textarea>
-        <button type="submit">Сохранить в конфиг</button>
-      </form>
-      <div class="result" id="codesResult"></div>
-      <div class="hint">JSON-конфиги создаются программой автоматически при первом запуске (или командой python cli.py codes-init) и хранятся в папке config/. При генерации ID готовые коды подставляются в код; если имени нет в справочнике — программа сообщит об ошибке.</div>
-    </div>
-
-    <div class="card">
-      <h2>Проверить ID</h2>
-      <form id="verForm">
-        <label>Код для проверки</label>
-        <input name="id" placeholder="напр. RM4KF-VT-A2238-HYEQ" required style="letter-spacing:1px">
-        <button type="submit">Проверить</button>
-      </form>
-      <div class="result" id="verResult"></div>
-      <div class="hint">Проверка контрольного кода работает даже без доступа к базе (как CRC у серийных номеров).</div>
-
-      <h2 style="margin-top:24px">Последние записи</h2>
-      <div id="list"><em style="color:#64748b">—</em></div>
-      <div style="display:flex;gap:8px;margin-top:10px">
+      <h2>База выданных ID</h2>
+      <div class="toolbar">
+        <button type="button" class="btn-sm" id="refreshList" style="width:auto;padding:9px 16px;background:#334155;color:var(--txt)">⟳ Обновить</button>
         <a href="/api/export?fmt=csv" download><button type="button" style="width:auto;padding:9px 16px;background:#334155;color:var(--txt)">⬇ Экспорт CSV</button></a>
         <a href="/api/export?fmt=xlsx" download><button type="button" style="width:auto;padding:9px 16px;background:#334155;color:var(--txt)">⬇ Экспорт Excel</button></a>
       </div>
+      <div id="list"><em style="color:#64748b">—</em></div>
+      <div class="result" id="dbMsg"></div>
+      <div class="hint">«Редактировать» — меняйте поля прямо в строке; после «Сохранить» UID будет пересчитан автоматически по новым данным (справочники и формат проверяются). «Удалить» убирает запись из базы без возможности восстановления.</div>
     </div>
-
-  </div>
+  </section>
 </div>
 
 <script src="/static/js/idgen.js"></script>

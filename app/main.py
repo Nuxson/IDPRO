@@ -111,6 +111,39 @@ def list_records(limit: int = Query(100, ge=1, le=1000)):
     return db.list_ids(limit)
 
 
+class IdUpdate(BaseModel):
+    """Частичное обновление записи: можно передать только изменяемые поля."""
+    producer: str | None = None
+    location: str | None = None
+    company: str | None = None
+    serial: str | None = None
+    port: str | None = None
+    site: str | None = None
+
+
+@app.put("/api/record/{record_id}")
+def update_record(record_id: str, data: IdUpdate):
+    """Редактирует запись базы; UID пересчитывается автоматически по новым данным."""
+    changes = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not changes:
+        raise HTTPException(400, "Не передано ни одного поля для изменения")
+    try:
+        res = db.update_record(record_id, changes, secret=SECRET)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]) if e.args else "Запись не найдена")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"changed": res["changed"], "record": res["record"]}
+
+
+@app.delete("/api/record/{record_id}")
+def delete_record(record_id: str):
+    """Удаляет запись из базы по UID (с разделителями или без)."""
+    if not db.delete_record(record_id):
+        raise HTTPException(404, f"Запись не найдена: {record_id}")
+    return {"deleted": record_id}
+
+
 @app.get("/api/export")
 def export(fmt: str = Query("csv", pattern="^(csv|xlsx)$")):
     """Экспорт всей базы выданных UID в CSV или Excel (.xlsx)."""

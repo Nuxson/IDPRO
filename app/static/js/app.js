@@ -172,16 +172,133 @@ $('#verForm').addEventListener('submit', async (e) => {
   }
 });
 
-/* ---------------- Список последних записей ---------------- */
+/* ---------------- Вкладки: ввод данных / база данных ---------------- */
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'database') loadList();
+  });
+});
+
+/* ---------------- Список базы данных (редактирование и удаление) ---------------- */
+let DB_ROWS = [];          // текущие записи, отображённые в таблице
+let editingCompact = null; // compact ID строки, открытой для редактирования
+
+function dbMsg(html, isError) {
+  const box = $('#dbMsg');
+  box.style.display = html ? 'block' : 'none';
+  box.innerHTML = isError ? `<span class="err">${esc(html)}</span>` : html;
+}
+
 async function loadList() {
   try {
-    const rows = await api('/api/list?limit=15');
-    $('#list').innerHTML = rows.length
-      ? `<table><tr><th>ID</th><th>Серийный №</th><th>Порт/площадка</th><th>Компания</th><th>Дата выдачи</th></tr>` +
-        rows.map((r) => `<tr><td style="font-family:Consolas,monospace">${esc(r.id)}</td><td>${esc(r.serial)}</td><td>${esc((r.port||'') + (r.site ? ' / ' + r.site : ''))}</td><td>${esc(r.company)}</td><td>${esc(r.created_at || '')}</td></tr>`).join('') +
-        `</table>`
-      : '<em style="color:#64748b">база пуста</em>';
+    DB_ROWS = await api('/api/list?limit=100');
+    renderList();
   } catch (e) { /* сервер недоступен — тихо пропускаем */ }
 }
+
+function _selOptions(names, current) {
+  const list = [...new Set([...names, current].filter(Boolean))];
+  return list.map((n) => `<option value="${esc(n)}"${n === current ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+
+function renderList() {
+  const producers = Object.keys(CODES_CACHE.producers || {});
+  const companies = Object.keys(CODES_CACHE.companies || {});
+  $('#list').innerHTML = DB_ROWS.length
+    ? `<table><tr><th>ID</th><th>Производитель</th><th>Место</th><th>Компания</th>
+         <th>Серийный №</th><th>Порт</th><th>Площадка</th><th>Дата выдачи</th><th></th></tr>` +
+      DB_ROWS.map((r) => {
+        if (r.compact === editingCompact) {
+          // Режим редактирования строки
+          return `<tr data-id="${esc(r.id)}">
+            <td style="font-family:Consolas,monospace" title="${esc(r.id)}">${esc(r.id)}<br><em style="color:#64748b;font-size:.75rem">после сохранения будет пересчитан</em></td>
+            <td><select name="producer">${_selOptions(producers, r.producer)}</select></td>
+            <td><input name="location" value="${esc(r.location)}"></td>
+            <td><select name="company">${_selOptions(companies, r.company)}</select></td>
+            <td><input name="serial" value="${esc(r.serial)}"></td>
+            <td><select name="port">
+              ${['TN_A', 'TN_B', 'TN_C'].map((p) => `<option value="${p}"${p === r.port ? ' selected' : ''}>${p}</option>`).join('')}
+            </select></td>
+            <td><input name="site" inputmode="numeric" pattern="[0-9]+" value="${esc(r.site)}"></td>
+            <td>${esc(r.created_at || '')}</td>
+            <td class="actions">
+              <button type="button" class="btn-sm btn-save" data-act="save">Сохранить</button>
+              <button type="button" class="btn-sm btn-cancel" data-act="cancel">Отмена</button>
+            </td></tr>`;
+        }
+        return `<tr data-id="${esc(r.id)}" data-compact="${esc(r.compact)}">
+          <td style="font-family:Consolas,monospace">${esc(r.id)}</td>
+          <td>${esc(r.producer)}</td><td>${esc(r.location)}</td><td>${esc(r.company)}</td>
+          <td>${esc(r.serial)}</td><td>${esc(r.port || '')}</td><td>${esc(r.site || '')}</td>
+          <td>${esc(r.created_at || '')}</td>
+          <td class="actions">
+            <button type="button" class="btn-sm btn-edit" data-act="edit">Редактировать</button>
+            <button type="button" class="btn-sm btn-del" data-act="delete">Удалить</button>
+          </td></tr>`;
+      }).join('') + `</table>`
+    : '<em style="color:#64748b">база пуста</em>';
+}
+
+$('#list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const tr = btn.closest('tr');
+  const act = btn.dataset.act;
+
+  if (act === 'edit') {
+    editingCompact = tr.dataset.compact;
+    dbMsg('');
+    renderList();
+    return;
+  }
+  if (act === 'cancel') {
+    editingCompact = null;
+    dbMsg('');
+    renderList();
+    return;
+  }
+  if (act === 'delete') {
+    if (!confirm(`Удалить запись ${tr.dataset.id} из базы безвозвратно?`)) return;
+    btn.disabled = true;
+    try {
+      await api('/api/record/' + encodeURIComponent(tr.dataset.id), { method: 'DELETE' });
+      dbMsg('Запись удалена.');
+      await loadList();
+    } catch (err) {
+      dbMsg('Ошибка удаления: ' + err.message, true);
+      btn.disabled = false;
+    }
+    return;
+  }
+  if (act === 'save') {
+    const changes = {};
+    tr.querySelectorAll('[name]').forEach((el) => { changes[el.name] = el.value.trim(); });
+    if (!changes.site || !/^[0-9]+$/.test(changes.site)) {
+      dbMsg('Номер площадки должен быть целым числом.', true); return;
+    }
+    btn.disabled = true;
+    try {
+      const res = await api('/api/record/' + encodeURIComponent(editingCompact), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(changes),
+      });
+      editingCompact = null;
+      dbMsg(res.changed
+        ? `Сохранено. Новый UID: <b style="font-family:Consolas,monospace">${esc(res.record.id)}</b>`
+        : 'Изменений не обнаружено.');
+      await loadList();
+    } catch (err) {
+      dbMsg('Ошибка сохранения: ' + err.message, true);
+      btn.disabled = false;
+    }
+  }
+});
+
+$('#refreshList').addEventListener('click', () => { dbMsg(''); loadList(); });
+
 loadList();
 refreshCodes();
