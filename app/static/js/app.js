@@ -172,16 +172,35 @@ $('#verForm').addEventListener('submit', async (e) => {
   }
 });
 
-/* ---------------- Вкладки: ввод данных / база данных ---------------- */
+/* ---------------- Вкладки: ввод данных / база данных / проверка кода ----------------
+   Кнопки-вкладки — ссылки с якорями (#input/#database/#validate): переключение
+   работает даже если JS-обработчик не успел/не смог подключиться. Обработчик ниже
+   лишь расставляет классы .active и подгружает список при открытии вкладки БД. */
+function activateTab(name) {
+  const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
+  const panel = document.getElementById('tab-' + name);
+  if (!btn || !panel) return false;
+  document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+  btn.classList.add('active');
+  panel.classList.add('active');
+  if (name === 'database') loadList();
+  return true;
+}
+
 document.querySelectorAll('.tab-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'database') loadList();
-  });
+  btn.addEventListener('click', () => { activateTab(btn.dataset.tab); });
 });
+
+/* Стартовая вкладка по адресу (например index.html#database) */
+window.addEventListener('hashchange', () => {
+  const t = location.hash.replace('#', '');
+  if (t) activateTab(t);
+});
+{
+  const t = location.hash.replace('#', '');
+  if (t && ['input', 'database', 'validate'].includes(t)) activateTab(t);
+}
 
 /* ---------------- Список базы данных (редактирование и удаление) ---------------- */
 let DB_ROWS = [];          // текущие записи, отображённые в таблице
