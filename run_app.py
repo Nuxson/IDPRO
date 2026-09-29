@@ -42,14 +42,20 @@ def _free_port(preferred: int) -> int:
 
 
 def _data_home() -> None:
-    """Все пользовательские данные (ids.db, config/) — в одном месте:
-    Windows:  %LOCALAPPDATA%\\IDPRO
-    Linux:    ~/.local/share/IDPRO
-    macOS:    ~/Library/Application Support/IDPRO
-    Так exe-шник и папка сборки остаются чистыми, база не теряется при обновлении.
+    """Каталог данных приложения.
+
+    Портативный режим (собранный exe, переменная IDPRO_PORTABLE=1):
+        данные рядом с exe — папку можно носить на флешке, ничего не
+        пишется в профиль пользователя.
+    Обычный режим:
+        Windows:  %LOCALAPPDATA%\\IDPRO
+        Linux:    ~/.local/share/IDPRO
+        macOS:    ~/Library/Application Support/IDPRO
     Переменные окружения IDGEN_DB / IDGEN_CONFIG_DIR имеют приоритет."""
     import sys
-    if sys.platform == "win32":
+    if os.environ.get("IDPRO_PORTABLE") == "1" and getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    elif sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "IDPRO"
     elif sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support" / "IDPRO"

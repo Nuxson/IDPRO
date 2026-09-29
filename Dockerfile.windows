@@ -1,0 +1,52 @@
+# ============================================================================
+# Docker-образ: Wine + Windows-Python + PyInstaller => IDPRO.exe на Linux-хосте
+# Многослойный: базовый слой (Wine, ~тяжёлый) кэшируется docker buildx.
+# ============================================================================
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    WINEDEBUG=-all \
+    WINEPREFIX=/root/.wine \
+    WINEDLLOVERRIDES="mscoree,mshtml=" \
+    PYVER=3.12.7
+
+# --- Wine (amd64) + утилиты -------------------------------------------------
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip xz-utils \
+        wine wine64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Инициализация Wine-префикса --------------------------------------------
+RUN wineboot --init && wineserver -w
+
+# --- Windows-CPython (embeddable + pip, полноценный для PyInstaller) --------
+# Берём официальный инсталлятор python.org и ставим его ТИХО в Wine:
+# InstallLauncherAllUsers=0 — без системных прав (и так root в контейнере,
+# но путь остаётся пользовательским).
+RUN curl -fsSL -o /tmp/py.exe \
+      "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-amd64.exe" \
+    && wine /tmp/py.exe /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_launcher=0 SimpleInstall=1 \
+    && wineserver -w \
+    && rm /tmp/py.exe
+
+# Путь к Windows-Python внутри префикса (C: => /root/.wine/drive_c)
+ENV PYDIR='C:\\Python312' \
+    PYWINE='/root/.wine/drive_c/Python312/python.exe'
+
+# --- Зависимости сборки (кэшируются отдельно от исходников) -----------------
+RUN wine "$PYWINE" -m pip install --no-cache-dir --upgrade pip \
+    && wine "$PYWINE" -m pip install --no-cache-dir \
+        "pyinstaller==6.11.0" "fastapi>=0.116" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
+    && wineserver -w
+
+# --- Копируем проект и собираем EXE -----------------------------------------
+WORKDIR /work
+COPY . /work
+RUN rm -rf /work/dist-windows /work/build \
+    && wine "$PYWINE" -m PyInstaller build.spec --distpath /work/dist-windows --workpath /tmp/build -y \
+    && wineserver -w \
+    # Портативный режим: данные рядом с exe, ничего не пишется в профиль пользователя
+    && printf '@echo off\r\nset IDPRO_PORTABLE=1\r\ncd /d "%%~dp0"\r\nstart "" "IDPRO.exe" %%*\r\n' \
+         > /work/dist-windows/IDPRO/run-portable.bat
+
+CMD ["true"]

@@ -11,6 +11,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('app/static', 'app/static'),   # веб-интерфейс (index.html, js/*)
+        ('config', 'config'),           # базовые справочники (копируются в dist рядом с exe)
     ],
     hiddenimports=[
         'uvicorn.logging',

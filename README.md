@@ -89,6 +89,41 @@ tests/test_idgen.py    # тесты (pytest)
 * Python 3.9+
 * Зависимости — в `requirements.txt` (`fastapi`, `uvicorn`, `pytest` для тестов).
 
+## Установка (разработка, без админ-прав)
+```bash
+git clone <адрес репозитория> && cd idpro
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python run_app.py                 # веб-интерфейс на http://127.0.0.1:8000
+```
+
+## Портативная сборка для Windows (из-под Linux, через Docker)
+PyInstaller не собирает «на кроссе» (Linux → Windows), поэтому `.exe` строится
+внутри Docker-контейнера с Wine + Windows-CPython (`Dockerfile.windows`).
+
+```bash
+./build_windows_docker.sh         # результат: dist-windows/IDPRO.zip
+```
+
+Перенос на целевой ПК (корпоративный Windows без Python и без админ-доступа):
+1. Скопируйте **всю папку** `dist-windows/IDPRO/` (или распакуйте `IDPRO.zip`)
+   в свою пользовательскую директорию, например `C:\Users\<вы>\IDPRO\`.
+   Нигде устанавливать ничего не нужно — режим portable.
+2. Запуск — двойным кликом **`run-portable.bat`** (ставит `IDPRO_PORTABLE=1`,
+   открывает браузер; база `ids.db` и справочники `config/` лежат рядом с exe).
+   Прямой запуск `IDPRO.exe` тоже работает, но данные попадут в `%LOCALAPPDATA%\IDPRO`.
+3. Приложение слушает только `127.0.0.1:8000` (loopback), сетевой доступ извне
+   не открывается; сервисы не регистрируются, реестр не трогается.
+
+Альтернатива без Docker — собрать `.exe` на любом Windows-ПК через
+portable-CPython с python.org (архив `.zip`, установка не требуется):
+```bat
+set PATH=C:\Users\<вы>\py312;%PATH%
+py -m pip install --user -r requirements.txt pyinstaller
+py -m PyInstaller build.spec
+```
+
 ## JavaScript-часть UI (`app/static/js/`)
 
 Интерфейс разбит на отдельные JS-модули (index.html подключает их тегами `<script src=...>`):
