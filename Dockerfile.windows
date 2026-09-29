@@ -33,13 +33,20 @@ RUN wineboot --init >/dev/null 2>&1; wineserver -w
 #    (python.exe, python312.dll, stdlib в python312.zip; без инсталлятора).
 # 2) правка python312._pth: включаем import site и Lib\site-packages
 #    (в embeddable по умолчанию изолированный режим — pip не смог бы ставить).
-# 3) get-pip.py (staple-версия от PyPA, детерминированный URL) ставит pip,
-#    setuptools и pre-built cryptography wheel. В embeddable-архиве нет
-#    libssl/libcrypto — берём их из bin-колес cryptography (там лежат ровно
-#    те же DLL, что идут с полным инсталлятором CPython).
-# 4) финальная проверка: интерпретатор + ssl + работоспособный pip.
-ENV GETPIP_VER=2024-08-08 \
-    CRYPTO_VER=43.0.0
+# 3) get-pip.py (PyPA, канонический URL bootstrap.pypa.io/get-pip.py) ставит
+#    pip + setuptools. ВАЖНО: у PyPA больше НЕТ версионного пути
+#    /pip/<minor>/get-pip.py для актуальных Python (для 3.12 он отдаёт 404 —
+#    именно на этом сборка падала); отдельная раскладка /pip/<старая-версия>/
+#    существует только для EOL-интерпретаторов (<=3.9). Берём универсальный
+#    корневой get-pip.py, который сам подбирает совместимый pip.
+# 4) В embeddable-архиве нет OpenSSL (libssl-3.dll / libcrypto-3.dll). Их
+#    берём из официального инсталлятора CPython той же версии: MSI распаковывается
+#    нативным `msiexec /a` (административная установка, Wine не нужен), затем
+#    DLL кладутся в каталог embeddable-питона. Никаких wine-инсталляторов,
+#    никаких компиляций — только детерминированные URL python.org/ftp.
+# 5) финальная проверка: интерпретатор + ssl + работоспособный pip.
+ENV GETPIP_URL=https://bootstrap.pypa.io/get-pip.py \
+    GETPIP_URL_EOL=https://bootstrap.pypa.io/pip/3.9/get-pip.py
 RUN set -eux; \
     curl -fsSL -o /tmp/py.zip \
       "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-embed-amd64.zip"; \
@@ -50,24 +57,22 @@ RUN set -eux; \
     sed -i -e 's/^#\?import site/import site/' \
            -e '$a Lib\\site-packages' "$pth"; \
     cat "$pth"; \
-    curl -fsSL -o /tmp/get-pip.py \
-      "https://bootstrap.pypa.io/pip/${PYVER%.*}/get-pip.py"; \
+    curl -fsSL -o /tmp/get-pip.py "$GETPIP_URL" \
+      || curl -fsSL -o /tmp/get-pip.py "$GETPIP_URL_EOL"; \
     wine 'C:\\Python312\\python.exe' /tmp/get-pip.py --no-cache-dir -q \
       || { echo "ERROR: get-pip failed"; wineserver -w; exit 1; }; \
     rm /tmp/get-pip.py; \
-    curl -fsSL -o /tmp/crypt.whl \
-      "https://files.pythonhosted.org/packages/source/c/cryptography/cryptography-${CRYPTO_VER}.tar.gz" \
-      || true; \
-    wine 'C:\\Python312\\python.exe' -m pip download -q --only-binary :all: \
-      --no-deps --dest /tmp "cryptography==${CRYPTO_VER}" \
-      || { echo "ERROR: pip download cryptography failed"; wineserver -w; exit 1; }; \
-    whl="$(ls /tmp/cryptography-*cp312*win_amd64*.whl | head -1)"; \
-    cd /tmp && unzip -q -o "$whl" 'cryptography/hazmat/bindings/*.dll'; \
-    cp -f /tmp/cryptography/hazmat/bindings/libssl-3-x64.dll /root/.wine/drive_c/Python312/libssl-3.dll \
-      2>/dev/null || cp -f "$(find /tmp/cryptography -name 'libssl*.dll' | head -1)" /root/.wine/drive_c/Python312/libssl-3.dll; \
-    cp -f /tmp/cryptography/hazmat/bindings/libcrypto-3-x64.dll /root/.wine/drive_c/Python312/libcrypto-3.dll \
-      2>/dev/null || cp -f "$(find /tmp/cryptography -name 'libcrypto*.dll' | head -1)" /root/.wine/drive_c/Python312/libcrypto-3.dll; \
-    rm -rf /tmp/cryptography /tmp/*.whl; \
+    curl -fsSL -o /tmp/py.msi \
+      "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-amd64.msi"; \
+    msiexec /i /tmp/py.msi /a /tmp/msi X64DIRDIR=Lib TARGETDIR=/tmp/msi >/dev/null 2>&1 \
+      || msiexec /i /tmp/py.msi /a /tmp/msi >/dev/null 2>&1 || true; \
+    ssl_dll="$(find /tmp/msi -iname 'libssl*.dll' | head -1)"; \
+    crypto_dll="$(find /tmp/msi -iname 'libcrypto*.dll' | head -1)"; \
+    test -n "$ssl_dll"; test -n "$crypto_dll"; \
+    cp -f "$ssl_dll" /root/.wine/drive_c/Python312/libssl-3.dll; \
+    cp -f "$crypto_dll" /root/.wine/drive_c/Python312/libcrypto-3.dll; \
+    ls -la /root/.wine/drive_c/Python312/libssl-3.dll /root/.wine/drive_c/Python312/libcrypto-3.dll; \
+    rm -rf /tmp/msi /tmp/py.msi; \
     wineserver -w; \
     wine 'C:\\Python312\\python.exe' -c \
       "import ssl, sys; print('windows-python OK:', sys.version, '| TLS:', ssl.OPENSSL_VERSION)"; \
