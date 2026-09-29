@@ -25,9 +25,14 @@ RUN wineboot --init && wineserver -w
 # но путь остаётся пользовательским).
 RUN curl -fsSL -o /tmp/py.exe \
       "https://www.python.org/ftp/python/${PYVER}/python-${PYVER}-amd64.exe" \
-    && wine /tmp/py.exe /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_launcher=0 SimpleInstall=1 \
-    && wineserver -w \
-    && rm /tmp/py.exe
+    && wine /tmp/py.exe /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_launcher=0 SimpleInstall=1 TargetDir=C:\\Python312; rc=$?; \
+       wineserver -w; \
+       if [ $rc -ne 0 ] || [ ! -f /root/.wine/drive_c/Python312/python.exe ]; then \
+         echo "ERROR: Windows-Python installer failed under Wine (rc=$rc)"; \
+         ls -la /root/.wine/drive_c/ 2>/dev/null; \
+         exit 1; \
+       fi; \
+       rm /tmp/py.exe
 
 # Путь к Windows-Python внутри префикса (C: => /root/.wine/drive_c)
 ENV PYDIR='C:\\Python312' \
