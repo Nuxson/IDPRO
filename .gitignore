@@ -1,6 +1,27 @@
-# Compiled files
+# Build artifacts (PyInstaller)
+build/
+dist/
+
+# Python compiled files and caches
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
 
-# Database files
-ids.db
+# Virtual environments
+.venv/
+venv/
+
+# Editor and IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System and OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
