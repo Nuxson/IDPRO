@@ -41,6 +41,11 @@
      другую вкладку прежнее содержимое остаётся на экране. */
   .tab-panel { display:none; }
   .tab-panel.active { display:block; }
+  /* Без JS: по умолчанию показываем панель ввода; при переходе по якорю — нужную */
+  #tab-input { display:block; }
+  #tab-database:target, #tab-validate:target { display:block; }
+  body:has(#tab-database:target) #tab-input,
+  body:has(#tab-validate:target) #tab-input { display:none; }
   .actions { display:flex; gap:6px; white-space:nowrap; }
   .btn-sm { margin:0; width:auto; padding:5px 12px; font-size:.8rem; border-radius:6px; }
   .btn-edit { background:#fbbf24; color:#422006; }
